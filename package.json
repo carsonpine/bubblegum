@@ -1,0 +1,7 @@
+{
+  "name": "solana-indexer",
+  "version": "1.0.0",
+  "main": "index.js",
+  "author": "Pine <carsonpine@hotmail.com>",
+  "license": "MIT"
+}
