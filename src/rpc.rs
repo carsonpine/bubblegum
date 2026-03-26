@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_rpc_client_api::config::{RpcTransactionConfig, GetConfirmedSignaturesForAddress2Config};
+use solana_rpc_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
+use solana_rpc_client_api::config::RpcTransactionConfig;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     pubkey::Pubkey,
