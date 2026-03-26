@@ -194,6 +194,7 @@ impl ClickhouseDb {
 }
 
 #[derive(Debug, Clone, Row, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct InstructionStatRow {
     pub instruction_name: String,
     pub date: u32,
