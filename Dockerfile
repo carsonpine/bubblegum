@@ -34,6 +34,7 @@ COPY --from=builder /build/target/release/bubblegum /app/bubblegum
 COPY static /app/static
 COPY init.sql /app/init.sql
 COPY init_ch.sql /app/init_ch.sql
+COPY idl.json /app/idl.json
 
 RUN useradd -r -s /bin/false bubblegum \
     && chown -R bubblegum:bubblegum /app
