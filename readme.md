@@ -61,6 +61,23 @@ graph TD
 
 ## Quick Start
 
+### Option 1: Quick Test (No Clone Required)
+
+```bash
+# 1. Download docker-compose file
+curl -O https://raw.githubusercontent.com/carsonpine/bubblegum/master/docker-compose.standalone.yml
+mv docker-compose.standalone.yml docker-compose.yml
+
+# 2. Edit HELIUS_RPC_URL in the file (add your API key)
+
+# 3. Launch
+docker compose up
+
+# Dashboard: http://localhost:3000
+```
+
+### Option 2: Full Setup (Clone Repo)
+
 ```bash
 # 1. Clone the repo
 git clone https://github.com/carsonpine/bubblegum
@@ -71,7 +88,7 @@ cp .env.example .env
 # Edit .env — set HELIUS_RPC_URL and PROGRAM_ID at minimum
 
 # 3. Launch everything
-docker compose up --build
+docker compose up
 
 # Dashboard: http://localhost:3000
 # Adminer:   http://localhost:8080
