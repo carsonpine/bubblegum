@@ -51,6 +51,31 @@ impl ClickhouseDb {
         Ok(())
     }
 
+    pub async fn init_tables(&self) -> Result<()> {
+        self.client
+            .query(
+                "CREATE TABLE IF NOT EXISTS transactions_history (
+                    signature String,
+                    slot UInt64,
+                    block_time Int64,
+                    program_id String,
+                    signer String,
+                    instruction_name LowCardinality(String),
+                    instruction_args String,
+                    accounts Array(String),
+                    transaction_hash String
+                ) ENGINE = MergeTree()
+                ORDER BY (program_id, slot, signature)",
+            )
+            .execute()
+            .await
+            .context("Failed to create ClickHouse transactions_history table")?;
+
+        tracing::info!("ClickHouse tables initialized");
+
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub async fn insert_transaction(&self, decoded: &DecodedInstruction) -> Result<()> {
         self.insert_transactions_batch(std::slice::from_ref(decoded))

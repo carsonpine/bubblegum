@@ -76,6 +76,12 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to connect to ClickHouse")?;
 
+    // Initialize ClickHouse tables
+    clickhouse
+        .init_tables()
+        .await
+        .context("Failed to initialize ClickHouse tables")?;
+
     tracing::info!("Connected to ClickHouse");
 
     let config = Arc::new(config);
