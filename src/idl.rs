@@ -149,7 +149,14 @@ pub struct IdlTypeDefValue {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IdlEnumVariant {
     pub name: String,
-    pub fields: Option<Vec<IdlField>>,
+    pub fields: Option<Vec<IdlEnumField>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum IdlEnumField {
+    Full(IdlField),
+    Simple(String),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

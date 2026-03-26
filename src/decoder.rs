@@ -458,10 +458,20 @@ fn decode_defined_type(
 
             if let Some(fields) = &variant.fields {
                 let mut map = serde_json::Map::new();
-                for field in fields {
-                    let value = decode_type(&field.field_type, reader, idl)
-                        .with_context(|| format!("decoding enum variant field '{}'", field.name))?;
-                    map.insert(field.name.clone(), value);
+                for (i, field) in fields.iter().enumerate() {
+                    let field_type = match field {
+                        crate::idl::IdlEnumField::Full(f) => &f.field_type,
+                        crate::idl::IdlEnumField::Simple(type_str) => {
+                            &crate::idl::IdlType::Primitive(type_str.clone())
+                        }
+                    };
+                    let field_name = match field {
+                        crate::idl::IdlEnumField::Full(f) => f.name.clone(),
+                        crate::idl::IdlEnumField::Simple(_) => format!("field_{}", i),
+                    };
+                    let value = decode_type(field_type, reader, idl)
+                        .with_context(|| format!("decoding enum variant field '{}'", field_name))?;
+                    map.insert(field_name, value);
                 }
                 Ok(serde_json::json!({ &variant.name: map }))
             } else {
