@@ -17,7 +17,7 @@ pub struct TransactionHistoryRow {
     pub transaction_hash: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClickhouseDb {
     client: Client,
     database: String,
