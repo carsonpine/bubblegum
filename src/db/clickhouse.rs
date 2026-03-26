@@ -46,10 +46,7 @@ impl ClickhouseDb {
             .await
             .context("ClickHouse ping failed")?;
 
-        tracing::info!(
-            "Connected to ClickHouse (database='{}')",
-            self.database
-        );
+        tracing::info!("Connected to ClickHouse (database='{}')", self.database);
 
         Ok(())
     }
@@ -76,8 +73,8 @@ impl ClickhouseDb {
                 .context("Failed to create ClickHouse inserter")?;
 
             for decoded in chunk {
-                let args_str = serde_json::to_string(&decoded.args)
-                    .unwrap_or_else(|_| "{}".to_string());
+                let args_str =
+                    serde_json::to_string(&decoded.args).unwrap_or_else(|_| "{}".to_string());
 
                 let accounts_str: Vec<String> = decoded
                     .accounts
@@ -97,15 +94,12 @@ impl ClickhouseDb {
                     transaction_hash: decoded.signature.clone(),
                 };
 
-                inserter
-                    .write(&row)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to write transaction {} to ClickHouse",
-                            decoded.signature
-                        )
-                    })?;
+                inserter.write(&row).await.with_context(|| {
+                    format!(
+                        "Failed to write transaction {} to ClickHouse",
+                        decoded.signature
+                    )
+                })?;
             }
 
             inserter
@@ -117,9 +111,7 @@ impl ClickhouseDb {
         Ok(())
     }
 
-    pub async fn get_instruction_stats(
-        &self,
-    ) -> Result<Vec<InstructionStatRow>> {
+    pub async fn get_instruction_stats(&self) -> Result<Vec<InstructionStatRow>> {
         let rows = self
             .client
             .query(
@@ -141,10 +133,7 @@ impl ClickhouseDb {
         Ok(rows)
     }
 
-    pub async fn execute_raw_query(
-        &self,
-        sql: &str,
-    ) -> Result<Vec<serde_json::Value>> {
+    pub async fn execute_raw_query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
         let rows: Vec<serde_json::Value> = self
             .client
             .query(sql)
@@ -172,10 +161,7 @@ impl ClickhouseDb {
         Ok(count)
     }
 
-    pub async fn get_recent_transactions(
-        &self,
-        limit: u64,
-    ) -> Result<Vec<TransactionHistoryRow>> {
+    pub async fn get_recent_transactions(&self, limit: u64) -> Result<Vec<TransactionHistoryRow>> {
         let rows = self
             .client
             .query(&format!(

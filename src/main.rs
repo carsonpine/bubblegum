@@ -34,7 +34,10 @@ async fn main() -> Result<()> {
         commitment: CommitmentConfig::confirmed(),
     }));
 
-    tracing::info!("RPC client initialized (rate_limit={} rps)", config.rpc_rate_limit);
+    tracing::info!(
+        "RPC client initialized (rate_limit={} rps)",
+        config.rpc_rate_limit
+    );
 
     let idl = load_idl(&config.idl_path, rpc_client.inner(), &config.program_id)
         .await
@@ -111,8 +114,8 @@ async fn main() -> Result<()> {
 }
 
 fn init_logging(log_level: &str) {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(log_level));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     let is_production = std::env::var("RUST_ENV")
         .map(|v| v == "production")

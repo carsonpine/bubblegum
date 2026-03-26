@@ -56,8 +56,7 @@ impl Config {
     }
 
     fn validate_and_build(raw: RawConfig) -> Result<Self> {
-        if !raw.helius_rpc_url.starts_with("http://")
-            && !raw.helius_rpc_url.starts_with("https://")
+        if !raw.helius_rpc_url.starts_with("http://") && !raw.helius_rpc_url.starts_with("https://")
         {
             return Err(anyhow!(
                 "HELIUS_RPC_URL must start with http:// or https://, got: {}",

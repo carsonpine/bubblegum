@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgPoolOptions, PgPool, Row, FromRow, ValueRef, Column};
+use sqlx::{postgres::PgPoolOptions, Column, FromRow, PgPool, Row, ValueRef};
 use std::time::Duration;
 
 use crate::decoder::DecodedInstruction;
@@ -49,7 +49,10 @@ impl PostgresDb {
             .await
             .context("PostgreSQL health check failed")?;
 
-        tracing::info!("Connected to PostgreSQL (max_connections={})", max_connections);
+        tracing::info!(
+            "Connected to PostgreSQL (max_connections={})",
+            max_connections
+        );
 
         Ok(PostgresDb { pool })
     }
@@ -122,8 +125,8 @@ impl PostgresDb {
         let mut inserted = 0usize;
 
         for decoded in transactions {
-            let accounts_json = serde_json::to_value(&decoded.accounts)
-                .context("Failed to serialize accounts")?;
+            let accounts_json =
+                serde_json::to_value(&decoded.accounts).context("Failed to serialize accounts")?;
 
             let result = sqlx::query(
                 r#"
@@ -146,10 +149,7 @@ impl PostgresDb {
             .execute(&mut *tx)
             .await
             .with_context(|| {
-                format!(
-                    "Batch insert failed for transaction {}",
-                    decoded.signature
-                )
+                format!("Batch insert failed for transaction {}", decoded.signature)
             })?;
 
             inserted += result.rows_affected() as usize;
@@ -221,7 +221,9 @@ impl PostgresDb {
             ORDER BY slot DESC
             LIMIT ${} OFFSET ${}
             "#,
-            where_clause, param_index, param_index + 1
+            where_clause,
+            param_index,
+            param_index + 1
         );
 
         let mut query = sqlx::query_as::<_, TransactionRow>(&query_str);
@@ -329,10 +331,7 @@ impl PostgresDb {
         })
     }
 
-    pub async fn execute_raw_query(
-        &self,
-        sql: &str,
-    ) -> Result<Vec<serde_json::Value>> {
+    pub async fn execute_raw_query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
         let rows = sqlx::query(sql)
             .fetch_all(&self.pool)
             .await
@@ -353,23 +352,15 @@ impl PostgresDb {
                                 .ok()
                                 .map(serde_json::Value::String)
                                 .or_else(|| {
-                                    row.try_get::<i64, _>(i)
-                                        .ok()
-                                        .map(|n| serde_json::json!(n))
+                                    row.try_get::<i64, _>(i).ok().map(|n| serde_json::json!(n))
                                 })
                                 .or_else(|| {
-                                    row.try_get::<f64, _>(i)
-                                        .ok()
-                                        .map(|n| serde_json::json!(n))
+                                    row.try_get::<f64, _>(i).ok().map(|n| serde_json::json!(n))
                                 })
                                 .or_else(|| {
-                                    row.try_get::<bool, _>(i)
-                                        .ok()
-                                        .map(serde_json::Value::Bool)
+                                    row.try_get::<bool, _>(i).ok().map(serde_json::Value::Bool)
                                 })
-                                .or_else(|| {
-                                    row.try_get::<serde_json::Value, _>(i).ok()
-                                })
+                                .or_else(|| row.try_get::<serde_json::Value, _>(i).ok())
                         }
                     })
                     .unwrap_or(serde_json::Value::Null);

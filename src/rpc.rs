@@ -2,19 +2,13 @@ use anyhow::{anyhow, Context, Result};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
 use solana_rpc_client_api::config::RpcTransactionConfig;
-use solana_sdk::{
-    commitment_config::CommitmentConfig,
-    pubkey::Pubkey,
-    signature::Signature,
-};
-use solana_transaction_status::{
-    EncodedConfirmedTransactionWithStatusMeta, UiTransactionEncoding,
-};
+use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey, signature::Signature};
+use solana_transaction_status::{EncodedConfirmedTransactionWithStatusMeta, UiTransactionEncoding};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::sleep;
 use tokio::sync::Semaphore;
+use tokio::time::sleep;
 
 const MAX_SIGNATURES_PER_REQUEST: usize = 1000;
 const BASE_BACKOFF_MS: u64 = 200;
@@ -36,10 +30,7 @@ pub struct HeliusRpcClient {
 
 impl HeliusRpcClient {
     pub fn new(config: RpcClientConfig) -> Self {
-        let inner = RpcClient::new_with_commitment(
-            config.url.clone(),
-            config.commitment,
-        );
+        let inner = RpcClient::new_with_commitment(config.url.clone(), config.commitment);
 
         let permits = config.rate_limit_rps.max(1) as usize;
         let semaphore = Arc::new(Semaphore::new(permits));
@@ -188,7 +179,12 @@ impl HeliusRpcClient {
 
         loop {
             let batch = self
-                .get_signatures_for_address(program_id, before, None, Some(MAX_SIGNATURES_PER_REQUEST))
+                .get_signatures_for_address(
+                    program_id,
+                    before,
+                    None,
+                    Some(MAX_SIGNATURES_PER_REQUEST),
+                )
                 .await?;
 
             if batch.is_empty() {
@@ -262,14 +258,11 @@ impl HeliusRpcClient {
                         || err.to_string().to_lowercase().contains("timed out");
 
                     if !is_transient {
-                        return Err(err.context(format!(
-                            "Non-retryable error in operation '{}'",
-                            operation
-                        )));
+                        return Err(err
+                            .context(format!("Non-retryable error in operation '{}'", operation)));
                     }
 
-                    let backoff_ms = (BASE_BACKOFF_MS * 2u64.pow(attempt - 1))
-                        .min(MAX_BACKOFF_MS);
+                    let backoff_ms = (BASE_BACKOFF_MS * 2u64.pow(attempt - 1)).min(MAX_BACKOFF_MS);
 
                     let jitter_ms = rand_jitter(backoff_ms / 4);
                     let wait_ms = backoff_ms + jitter_ms;

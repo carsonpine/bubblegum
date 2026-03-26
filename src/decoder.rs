@@ -93,8 +93,8 @@ impl TransactionDecoder {
             };
 
             let args_data = &data[INSTRUCTION_DISCRIMINATOR_SIZE..];
-            let args = decode_args(&idl_instruction.args, args_data, &self.idl)
-                .unwrap_or_else(|e| {
+            let args =
+                decode_args(&idl_instruction.args, args_data, &self.idl).unwrap_or_else(|e| {
                     tracing::warn!(
                         signature = %signature,
                         instruction = %idl_instruction.name,
@@ -259,11 +259,7 @@ fn decode_instruction_data(data_b58: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("Failed to base58-decode instruction data: '{}'", data_b58))
 }
 
-pub fn decode_args(
-    fields: &[IdlField],
-    data: &[u8],
-    idl: &ParsedIdl,
-) -> Result<serde_json::Value> {
+pub fn decode_args(fields: &[IdlField], data: &[u8], idl: &ParsedIdl) -> Result<serde_json::Value> {
     let mut reader = BorshReader::new(data);
     let mut map = serde_json::Map::new();
 
@@ -424,7 +420,12 @@ fn decode_defined_type(
 ) -> Result<serde_json::Value> {
     let type_defs = match &idl.raw.type_defs {
         Some(defs) => defs,
-        None => return Err(anyhow!("IDL has no type definitions, cannot decode '{}'", type_name)),
+        None => {
+            return Err(anyhow!(
+                "IDL has no type definitions, cannot decode '{}'",
+                type_name
+            ))
+        }
     };
 
     let typedef = type_defs

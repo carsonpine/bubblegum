@@ -242,10 +242,7 @@ impl Idl {
     pub async fn from_account(rpc_client: &RpcClient, program_id: &Pubkey) -> Result<Self> {
         let idl_address = derive_idl_address(program_id)?;
 
-        tracing::debug!(
-            "Fetching on-chain IDL from account: {}",
-            idl_address
-        );
+        tracing::debug!("Fetching on-chain IDL from account: {}", idl_address);
 
         let account_data = rpc_client
             .get_account_data(&idl_address)
@@ -329,7 +326,10 @@ pub async fn load_idl(
 ) -> Result<ParsedIdl> {
     let idl = match idl_path {
         Some(path) if path == "account" => {
-            tracing::info!("Loading IDL from on-chain account for program {}", program_id);
+            tracing::info!(
+                "Loading IDL from on-chain account for program {}",
+                program_id
+            );
             Idl::from_account(rpc_client, program_id).await?
         }
         Some(path) => {

@@ -16,7 +16,11 @@ mod tests {
 
         for name in &names {
             let disc = compute_discriminator(name);
-            assert!(!discriminators.contains(&disc), "Duplicate discriminator found for {}", name);
+            assert!(
+                !discriminators.contains(&disc),
+                "Duplicate discriminator found for {}",
+                name
+            );
             discriminators.push(disc);
         }
     }
@@ -24,9 +28,7 @@ mod tests {
     #[test]
     fn test_discriminator_byte_distribution() {
         let names = vec!["a", "ab", "abc", "abcd", "initialize", "swap", "deposit"];
-        let discriminators: Vec<[u8; 8]> = names.iter()
-            .map(|n| compute_discriminator(n))
-            .collect();
+        let discriminators: Vec<[u8; 8]> = names.iter().map(|n| compute_discriminator(n)).collect();
 
         for i in 0..discriminators.len() {
             for j in (i + 1)..discriminators.len() {
@@ -61,7 +63,7 @@ mod tests {
         let normal = compute_discriminator("swap");
         let with_underscore = compute_discriminator("swap_now");
         let with_space = compute_discriminator("swap now");
-        
+
         assert_ne!(normal, with_underscore);
         assert_ne!(normal, with_space);
         assert_ne!(with_underscore, with_space);

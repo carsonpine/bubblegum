@@ -46,7 +46,10 @@ impl Indexer {
     }
 
     pub async fn run(&self, shutdown_rx: watch::Receiver<bool>) -> Result<()> {
-        tracing::info!("Indexer starting for program: {}", self.config.program_id_str);
+        tracing::info!(
+            "Indexer starting for program: {}",
+            self.config.program_id_str
+        );
 
         let current_slot = self
             .rpc
@@ -58,11 +61,7 @@ impl Indexer {
 
         let (start_slot, end_slot) = self.resolve_slot_range(current_slot).await?;
 
-        tracing::info!(
-            "Indexing slot range: {} -> {}",
-            start_slot,
-            end_slot
-        );
+        tracing::info!("Indexing slot range: {} -> {}", start_slot, end_slot);
 
         let total_slots = end_slot.saturating_sub(start_slot);
         let mut total_transactions_stored = 0usize;
@@ -77,16 +76,9 @@ impl Indexer {
 
             let batch_end = (current_start + self.config.batch_size as u64).min(end_slot);
 
-            tracing::debug!(
-                "Processing slot batch: {} -> {}",
-                current_start,
-                batch_end
-            );
+            tracing::debug!("Processing slot batch: {} -> {}", current_start, batch_end);
 
-            match self
-                .process_slot_batch(current_start, batch_end)
-                .await
-            {
+            match self.process_slot_batch(current_start, batch_end).await {
                 Ok(stored) => {
                     total_transactions_stored += stored;
                     self.postgres
@@ -110,9 +102,7 @@ impl Indexer {
                         0.0
                     };
 
-                    if total_transactions_stored % PROGRESS_LOG_INTERVAL == 0
-                        || stored > 0
-                    {
+                    if total_transactions_stored % PROGRESS_LOG_INTERVAL == 0 || stored > 0 {
                         tracing::info!(
                             "Progress: slot {}/{} ({:.1}%) | {} tx stored | {:.1} tx/s",
                             current_start,
@@ -133,12 +123,7 @@ impl Indexer {
 
                     let _ = self
                         .postgres
-                        .insert_dead_letter(
-                            None,
-                            Some(current_start as i64),
-                            &e.to_string(),
-                            None,
-                        )
+                        .insert_dead_letter(None, Some(current_start as i64), &e.to_string(), None)
                         .await;
                 }
             }

@@ -14,8 +14,8 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::db::{ClickhouseDb, PostgresDb};
 use crate::db::postgres::{DbStats, TransactionFilters};
+use crate::db::{ClickhouseDb, PostgresDb};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -190,11 +190,7 @@ async fn get_stats(
 ) -> Result<Json<StatsResponse>, (StatusCode, Json<ErrorResponse>)> {
     let pg_stats = state.postgres.get_stats().await.map_err(map_err)?;
 
-    let ch_total = state
-        .clickhouse
-        .get_total_count()
-        .await
-        .unwrap_or(0);
+    let ch_total = state.clickhouse.get_total_count().await.unwrap_or(0);
 
     Ok(Json(StatsResponse {
         postgres: pg_stats,

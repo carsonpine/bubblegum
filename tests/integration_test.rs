@@ -30,7 +30,10 @@ mod config_tests {
     #[test]
     fn test_program_id_format() {
         let program_id = common::test_program_id();
-        assert!(program_id.to_string().len() >= 32, "Program ID should be at least 32 chars");
+        assert!(
+            program_id.to_string().len() >= 32,
+            "Program ID should be at least 32 chars"
+        );
     }
 }
 
@@ -66,7 +69,7 @@ mod idl_tests {
 
         let parsed = ParsedIdl::from_idl(mock_idl);
         assert!(parsed.is_ok());
-        
+
         let parsed = parsed.unwrap();
         assert_eq!(parsed.program_name, "test_program");
     }
@@ -76,23 +79,21 @@ mod idl_tests {
 mod decoder_tests {
     use super::*;
     use bubblegum::decoder::{DecodedInstruction, TransactionDecoder};
-    use bubblegum::idl::{Idl, ParsedIdl, IdlInstruction};
+    use bubblegum::idl::{Idl, IdlInstruction, ParsedIdl};
     use std::sync::Arc;
 
     fn create_test_idl() -> ParsedIdl {
         let mock_idl = Idl {
             address: None,
             metadata: None,
-            instructions: vec![
-                IdlInstruction {
-                    name: "swap".to_string(),
-                    discriminator: vec![0, 1, 2, 3, 4, 5, 6, 7],
-                    args: vec![],
-                    accounts: vec![],
-                    docs: None,
-                    returns: None,
-                }
-            ],
+            instructions: vec![IdlInstruction {
+                name: "swap".to_string(),
+                discriminator: vec![0, 1, 2, 3, 4, 5, 6, 7],
+                args: vec![],
+                accounts: vec![],
+                docs: None,
+                returns: None,
+            }],
             type_defs: None,
             version: None,
             name: Some("test".to_string()),
@@ -108,7 +109,7 @@ mod decoder_tests {
     fn test_decoder_creation() {
         let idl = Arc::new(create_test_idl());
         let program_id = common::test_program_id().to_string();
-        
+
         let _decoder = TransactionDecoder::new(idl, program_id);
     }
 
@@ -218,7 +219,7 @@ mod batch_size_tests {
     fn test_batch_size_calculation() {
         let batch_size: usize = 100;
         let total_slots: u64 = 10000;
-        
+
         let batches_needed = (total_slots as f64 / batch_size as f64).ceil() as usize;
         assert_eq!(batches_needed, 100);
     }
