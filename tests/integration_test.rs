@@ -1,5 +1,3 @@
-use anyhow::Result;
-
 mod common {
     use solana_sdk::{pubkey::Pubkey, signature::Signature};
     use std::str::FromStr;
