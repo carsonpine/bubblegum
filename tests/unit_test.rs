@@ -27,7 +27,7 @@ mod tests {
 
     #[test]
     fn test_discriminator_byte_distribution() {
-        let names = vec!["a", "ab", "abc", "abcd", "initialize", "swap", "deposit"];
+        let names = ["a", "ab", "abc", "abcd", "initialize", "swap", "deposit"];
         let discriminators: Vec<[u8; 8]> = names.iter().map(|n| compute_discriminator(n)).collect();
 
         for i in 0..discriminators.len() {

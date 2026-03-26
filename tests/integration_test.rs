@@ -13,7 +13,7 @@ mod common {
 
 #[cfg(test)]
 mod config_tests {
-    use super::*;
+    use crate::common;
     use std::env;
 
     #[test]
@@ -37,7 +37,7 @@ mod config_tests {
 
 #[cfg(test)]
 mod idl_tests {
-    use super::*;
+
     use bubblegum::idl::{Idl, ParsedIdl};
 
     #[test]
@@ -75,7 +75,7 @@ mod idl_tests {
 
 #[cfg(test)]
 mod decoder_tests {
-    use super::*;
+    use crate::common;
     use bubblegum::decoder::{DecodedInstruction, TransactionDecoder};
     use bubblegum::idl::{Idl, IdlInstruction, ParsedIdl};
     use std::sync::Arc;
@@ -132,7 +132,6 @@ mod decoder_tests {
 
 #[cfg(test)]
 mod rpc_tests {
-    use super::*;
     use bubblegum::rpc::{HeliusRpcClient, RpcClientConfig};
     use solana_sdk::commitment_config::CommitmentConfig;
 
@@ -159,7 +158,6 @@ mod rpc_tests {
 
 #[cfg(test)]
 mod database_tests {
-    use super::*;
 
     #[test]
     fn test_postgres_url_format() {
@@ -179,7 +177,6 @@ mod database_tests {
 
 #[cfg(test)]
 mod checkpoint_tests {
-    use super::*;
 
     #[test]
     fn test_checkpoint_key() {
@@ -201,7 +198,6 @@ mod checkpoint_tests {
 
 #[cfg(test)]
 mod batch_size_tests {
-    use super::*;
 
     #[test]
     fn test_batch_size_constraints() {
