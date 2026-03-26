@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::signal;
 use tokio::sync::watch;
 

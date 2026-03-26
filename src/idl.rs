@@ -315,7 +315,6 @@ fn decompress_idl_data(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn compute_discriminator(instruction_name: &str) -> [u8; 8] {
-    use std::hash::Hasher;
     let preimage = format!("global:{}", instruction_name);
     let hash = solana_sdk::hash::hash(preimage.as_bytes());
     let mut disc = [0u8; 8];
