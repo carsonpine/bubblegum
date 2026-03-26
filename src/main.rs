@@ -55,6 +55,12 @@ async fn main() -> Result<()> {
             .context("Failed to connect to PostgreSQL")?,
     );
 
+    // Run migrations on startup
+    postgres
+        .run_migrations()
+        .await
+        .context("Failed to run PostgreSQL migrations")?;
+
     tracing::info!("Connected to PostgreSQL");
 
     let clickhouse = Arc::new(ClickhouseDb::new(
