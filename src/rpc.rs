@@ -83,11 +83,10 @@ impl HeliusRpcClient {
             let _permit = self.acquire_rate_limit().await;
 
             let config = GetConfirmedSignaturesForAddress2Config {
-                before: before.map(|s| s.to_string()),
-                until: until.map(|s| s.to_string()),
+                before,
+                until,
                 limit: Some(limit.unwrap_or(MAX_SIGNATURES_PER_REQUEST)),
                 commitment: Some(self.config.commitment),
-                min_context_slot: None,
             };
 
             self.inner
