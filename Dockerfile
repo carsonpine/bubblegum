@@ -1,13 +1,15 @@
-FROM rust:1.93-bookworm AS builder
+FROM rust:1.93-alpine AS builder
 
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    libclang-dev \
+RUN apk add --no-cache \
+    musl-dev \
+    openssl-dev \
     clang \
+    llvm-dev \
+    libclang \
     cmake \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    make \
+    g++ \
+    pkgconfig
 
 WORKDIR /build
 
@@ -17,15 +19,16 @@ RUN cargo build --release 2>/dev/null || true
 RUN rm -f src/main.rs
 
 COPY src ./src
+COPY migrations ./migrations
 RUN touch src/main.rs
 RUN cargo build --release
 
-FROM debian:bookworm-slim AS runtime
+FROM alpine:3.20 AS runtime
 
-RUN apt-get update && apt-get install -y \
+RUN apk add --no-cache \
     libssl3 \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    tzdata
 
 WORKDIR /app
 
@@ -34,7 +37,7 @@ COPY static /app/static
 COPY init.sql /app/init.sql
 COPY init_ch.sql /app/init_ch.sql
 
-RUN useradd -r -s /bin/false bubblegum \
+RUN adduser -D -s /bin/false bubblegum \
     && chown -R bubblegum:bubblegum /app
 
 USER bubblegum
