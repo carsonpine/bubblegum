@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_rpc_client_api::config::{RpcTransactionConfig, RpcSignaturesForAddressConfig};
+use solana_rpc_client_api::config::{RpcTransactionConfig, GetConfirmedSignaturesForAddress2Config};
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     pubkey::Pubkey,
@@ -81,7 +81,7 @@ impl HeliusRpcClient {
         self.with_retry("get_signatures_for_address", || async {
             let _permit = self.acquire_rate_limit().await;
 
-            let config = RpcSignaturesForAddressConfig {
+            let config = GetConfirmedSignaturesForAddress2Config {
                 before: before.map(|s| s.to_string()),
                 until: until.map(|s| s.to_string()),
                 limit: Some(limit.unwrap_or(MAX_SIGNATURES_PER_REQUEST)),
