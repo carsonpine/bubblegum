@@ -18,6 +18,7 @@ pub struct Indexer {
     rpc: Arc<HeliusRpcClient>,
     postgres: Arc<PostgresDb>,
     clickhouse: Arc<ClickhouseDb>,
+    #[allow(dead_code)]
     idl: Arc<ParsedIdl>,
     decoder: Arc<TransactionDecoder>,
 }
