@@ -45,7 +45,7 @@ impl Indexer {
         }
     }
 
-    pub async fn run(&self, mut shutdown_rx: watch::Receiver<bool>) -> Result<()> {
+    pub async fn run(&self, shutdown_rx: watch::Receiver<bool>) -> Result<()> {
         tracing::info!("Indexer starting for program: {}", self.config.program_id_str);
 
         let current_slot = self

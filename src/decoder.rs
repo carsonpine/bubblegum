@@ -48,7 +48,7 @@ impl TransactionDecoder {
         let slot = tx.slot;
         let timestamp = tx.block_time.unwrap_or(0);
 
-        let (message, signature, meta) = extract_transaction_parts(tx)?;
+        let (message, signature, _meta) = extract_transaction_parts(tx)?;
 
         let account_keys = extract_account_keys(&message)?;
         let signer = account_keys.first().cloned().unwrap_or_default();
@@ -182,7 +182,7 @@ fn extract_transaction_parts(
                 .unwrap_or_else(|| "unknown".to_string());
             (ui_tx.message.clone(), sig)
         }
-        EncodedTransaction::Binary(data, _encoding) => {
+        EncodedTransaction::Binary(_data, _encoding) => {
             return Err(anyhow!(
                 "Binary-encoded transactions are not supported in this decoder path"
             ));
