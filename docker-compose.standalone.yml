@@ -10,6 +10,7 @@ services:
       POSTGRES_PASSWORD: changeme
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
@@ -27,6 +28,7 @@ services:
       CLICKHOUSE_PASSWORD: changeme
     volumes:
       - chdata:/var/lib/clickhouse
+      - ./init_ch.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "8123:8123"
 
