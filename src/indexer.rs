@@ -264,7 +264,7 @@ impl Indexer {
 fn extract_signature(
     tx: &solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta,
 ) -> String {
-    use solana_transaction_status::{EncodedTransaction, UiMessage};
+    use solana_transaction_status::EncodedTransaction;
 
     match &tx.transaction.transaction {
         EncodedTransaction::Json(ui_tx) => ui_tx
