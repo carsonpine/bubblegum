@@ -5,7 +5,7 @@ RUN apk add --no-cache \
     openssl-dev \
     clang \
     llvm-dev \
-    libclang \
+    clang-libs \
     cmake \
     make \
     g++ \
