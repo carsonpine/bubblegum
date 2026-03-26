@@ -1,10 +1,8 @@
 use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
-use std::str::FromStr;
 
 const IDL_ACCOUNT_SEED: &[u8] = b"anchor:idl";
 const IDL_ACCOUNT_DISCRIMINATOR_SIZE: usize = 8;
