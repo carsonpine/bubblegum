@@ -29,12 +29,6 @@ services:
       - chdata:/var/lib/clickhouse
     ports:
       - "8123:8123"
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
-      interval: 10s
-      timeout: 10s
-      retries: 20
-      start_period: 30s
 
   indexer:
     image: ghcr.io/carsonpine/bubblegum:latest
@@ -50,10 +44,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      postgres:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
+      - postgres
+      - clickhouse
 
 volumes:
   pgdata:
