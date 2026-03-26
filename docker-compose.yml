@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: bubblegum-postgres
+    environment:
+      POSTGRES_DB: solana_indexer
+      POSTGRES_USER: indexer
+      POSTGRES_PASSWORD: changeme
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "indexer", "-d", "solana_indexer"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23-alpine
+    container_name: bubblegum-clickhouse
+    environment:
+      CLICKHOUSE_DB: solana_indexer
+      CLICKHOUSE_USER: indexer
+      CLICKHOUSE_PASSWORD: changeme
+    volumes:
+      - chdata:/var/lib/clickhouse
+      - ./init_ch.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+  indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bubblegum-indexer
+    environment:
+      HELIUS_RPC_URL: ${HELIUS_RPC_URL}
+      POSTGRES_URL: postgres://indexer:changeme@postgres:5432/solana_indexer
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: indexer
+      CLICKHOUSE_PASSWORD: changeme
+      CLICKHOUSE_DB: solana_indexer
+      PROGRAM_ID: ${PROGRAM_ID}
+      START_SLOT: ${START_SLOT:-}
+      END_SLOT: ${END_SLOT:-}
+      BATCH_SIZE: ${BATCH_SIZE:-100}
+      IDL_PATH: ${IDL_PATH:-account}
+      API_PORT: 3000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RPC_RATE_LIMIT: ${RPC_RATE_LIMIT:-10}
+      DB_MAX_CONNECTIONS: 10
+      CH_BATCH_SIZE: 1000
+      RUST_ENV: production
+      RUST_LOG: ${LOG_LEVEL:-info}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./static:/app/static:ro
+      - ${IDL_FILE:-/dev/null}:/app/idl.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:latest
+    container_name: bubblegum-adminer
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: dracula
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    driver: local
+  chdata:
+    driver: local
