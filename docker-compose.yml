@@ -40,7 +40,8 @@ services:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
       interval: 5s
       timeout: 5s
-      retries: 15
+      retries: 20
+      start_period: 30s
     restart: unless-stopped
 
   indexer:
