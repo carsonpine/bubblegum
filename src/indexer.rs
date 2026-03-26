@@ -103,7 +103,7 @@ impl Indexer {
                         0.0
                     };
 
-                    if total_transactions_stored % PROGRESS_LOG_INTERVAL == 0 || stored > 0 {
+                    if total_transactions_stored.is_multiple_of(PROGRESS_LOG_INTERVAL) || stored > 0 {
                         tracing::info!(
                             "Progress: slot {}/{} ({:.1}%) | {} tx stored | {:.1} tx/s",
                             current_start,

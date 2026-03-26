@@ -51,6 +51,7 @@ impl ClickhouseDb {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn insert_transaction(&self, decoded: &DecodedInstruction) -> Result<()> {
         self.insert_transactions_batch(std::slice::from_ref(decoded))
             .await
@@ -111,6 +112,7 @@ impl ClickhouseDb {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn get_instruction_stats(&self) -> Result<Vec<InstructionStatRow>> {
         let rows = self
             .client
@@ -143,7 +145,7 @@ impl ClickhouseDb {
             .into_iter()
             .map(|row_str| {
                 serde_json::from_str::<serde_json::Value>(&row_str)
-                    .unwrap_or_else(|_| serde_json::Value::String(row_str))
+                    .unwrap_or(serde_json::Value::String(row_str))
             })
             .collect();
 
@@ -161,6 +163,7 @@ impl ClickhouseDb {
         Ok(count)
     }
 
+    #[allow(dead_code)]
     pub async fn get_recent_transactions(&self, limit: u64) -> Result<Vec<TransactionHistoryRow>> {
         let rows = self
             .client

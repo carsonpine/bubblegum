@@ -293,6 +293,7 @@ fn rand_jitter(max_ms: u64) -> u64 {
     (nanos as u64) % max_ms
 }
 
+#[allow(dead_code)]
 pub fn parse_signature(s: &str) -> Result<Signature> {
     Signature::from_str(s).with_context(|| format!("Invalid Solana signature: '{}'", s))
 }

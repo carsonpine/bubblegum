@@ -57,6 +57,7 @@ impl PostgresDb {
         Ok(PostgresDb { pool })
     }
 
+    #[allow(dead_code)]
     pub async fn run_migrations(&self) -> Result<()> {
         sqlx::migrate!("./migrations")
             .run(&self.pool)
@@ -66,10 +67,12 @@ impl PostgresDb {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
 
+    #[allow(dead_code)]
     pub async fn insert_transaction(
         &self,
         decoded: &DecodedInstruction,
