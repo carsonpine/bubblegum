@@ -1,3 +1,4 @@
 red-t4-mea.txt
 /target
 .env
+*.sbom
