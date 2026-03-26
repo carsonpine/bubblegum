@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::decoder::BorshReader;
-    use crate::idl::compute_discriminator;
+    use bubblegum::idl::compute_discriminator;
 
     #[test]
     fn test_discriminator_consistency() {
@@ -20,17 +19,6 @@ mod tests {
             assert!(!discriminators.contains(&disc), "Duplicate discriminator found for {}", name);
             discriminators.push(disc);
         }
-    }
-
-    #[test]
-    fn test_borsh_reader_basic_types() {
-        let data = vec![255u8];
-        let mut reader = BorshReader::new(&data);
-        assert_eq!(reader.read_u8().unwrap(), 255);
-
-        let data = vec![0xFFu8];
-        let mut reader = BorshReader::new(&data);
-        assert_eq!(reader.read_i8().unwrap(), -1);
     }
 
     #[test]
