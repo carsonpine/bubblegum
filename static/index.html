@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bubblegum — Solana Indexer</title>
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ── HEADER ─────────────────────────────── -->
+    <header class="header">
+      <div class="header-logo">
+        <div class="logo-icon">🫧</div>
+        <div>
+          <div class="logo-text">bubblegum</div>
+          <div class="logo-subtitle">solana program indexer</div>
+        </div>
+      </div>
+
+      <div class="header-stats">
+        <div class="stat-pill">
+          <span class="stat-value" id="stat-total">—</span>
+          <span class="stat-label">Transactions</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-value" id="stat-slot">—</span>
+          <span class="stat-label">Last Slot</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-value" id="stat-programs">—</span>
+          <span class="stat-label">Programs</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-value" id="stat-ch-total">—</span>
+          <span class="stat-label">ClickHouse</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="live-badge" id="live-badge">
+          <span class="live-dot"></span>
+          Live
+        </div>
+      </div>
+    </header>
+
+    <!-- ── MAIN ───────────────────────────────── -->
+    <main class="main-content">
+
+      <!-- TABS -->
+      <nav class="tabs">
+        <button class="tab-btn active" data-tab="transactions">Transactions</button>
+        <button class="tab-btn" data-tab="sql">SQL Query Tool</button>
+      </nav>
+
+      <!-- ── TRANSACTIONS TAB ─────────────────── -->
+      <section class="tab-panel active" id="tab-transactions">
+
+        <!-- Filters -->
+        <div class="filters-bar">
+          <div class="filter-group">
+            <label for="filter-instruction">Instruction</label>
+            <input
+              id="filter-instruction"
+              class="filter-input"
+              type="text"
+              placeholder="e.g. swap"
+            />
+          </div>
+          <div class="filter-group">
+            <label for="filter-signer">Signer</label>
+            <input
+              id="filter-signer"
+              class="filter-input"
+              type="text"
+              placeholder="Pubkey..."
+            />
+          </div>
+          <div class="filter-group">
+            <label for="filter-start-slot">Start Slot</label>
+            <input
+              id="filter-start-slot"
+              class="filter-input"
+              type="number"
+              placeholder="e.g. 200000000"
+            />
+          </div>
+          <div class="filter-group">
+            <label for="filter-end-slot">End Slot</label>
+            <input
+              id="filter-end-slot"
+              class="filter-input"
+              type="number"
+              placeholder="e.g. 200001000"
+            />
+          </div>
+          <div class="filter-group">
+            <label>&nbsp;</label>
+            <button class="btn btn-primary" id="btn-filter">
+              <span>Filter</span>
+            </button>
+          </div>
+          <div class="filter-group">
+            <label>&nbsp;</label>
+            <button class="btn btn-ghost" id="btn-reset">Reset</button>
+          </div>
+          <div class="filter-group" style="margin-left:auto">
+            <label>&nbsp;</label>
+            <button class="btn btn-ghost" id="btn-export-csv">⬇ CSV</button>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div class="table-container">
+          <div class="table-header-bar">
+            <span class="table-title">Recent Transactions</span>
+            <span class="table-count" id="tx-count">—</span>
+          </div>
+          <div style="overflow-x:auto;">
+            <table id="tx-table">
+              <thead>
+                <tr>
+                  <th data-sort="signature">Signature</th>
+                  <th data-sort="slot">Slot</th>
+                  <th data-sort="instruction_name">Instruction</th>
+                  <th data-sort="signer">Signer</th>
+                  <th data-sort="block_time">Time</th>
+                </tr>
+              </thead>
+              <tbody id="tx-body">
+                <tr class="loading-row">
+                  <td colspan="5">
+                    <span class="loading-spinner"></span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Pagination -->
+        <div style="display:flex;align-items:center;justify-content:center;gap:0.75rem;margin-top:0.5rem;">
+          <button class="btn btn-ghost" id="btn-prev">← Prev</button>
+          <span style="font-size:0.8rem;color:var(--text-muted)" id="page-label">Page 1</span>
+          <button class="btn btn-ghost" id="btn-next">Next →</button>
+        </div>
+
+      </section>
+
+      <!-- ── SQL TOOL TAB ────────────────────── -->
+      <section class="tab-panel" id="tab-sql">
+        <div class="sql-tool">
+
+          <!-- Editor + Results -->
+          <div class="sql-editor-panel">
+            <div class="sql-toolbar">
+              <select class="db-selector" id="db-select">
+                <option value="postgres">PostgreSQL</option>
+                <option value="clickhouse">ClickHouse</option>
+              </select>
+              <button class="btn btn-primary" id="btn-run-sql">
+                <span id="sql-run-label">▶ Run</span>
+              </button>
+              <button class="btn btn-ghost" id="btn-clear-sql">Clear</button>
+              <button class="btn btn-ghost" id="btn-export-json">⬇ JSON</button>
+            </div>
+
+            <textarea
+              id="sql-input"
+              spellcheck="false"
+              placeholder="SELECT * FROM transactions ORDER BY slot DESC LIMIT 20;"
+            ></textarea>
+
+            <div class="sql-results-container">
+              <div class="results-meta">
+                <span id="results-info">No results yet</span>
+                <span id="results-time"></span>
+              </div>
+              <div class="results-table-wrap" id="results-table-wrap">
+                <div class="empty-state">
+                  <div class="empty-icon">🔍</div>
+                  <p>Run a query to see results</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sidebar: prebuilt + history -->
+          <div class="query-history-panel">
+
+            <div class="prebuilt-queries">
+              <div class="prebuilt-title">Prebuilt Queries</div>
+
+              <button class="prebuilt-btn" data-db="postgres" data-sql="SELECT instruction_name, COUNT(*) AS count FROM transactions GROUP BY instruction_name ORDER BY count DESC LIMIT 20;">
+                Top instructions (PG)
+              </button>
+
+              <button class="prebuilt-btn" data-db="postgres" data-sql="SELECT signer, COUNT(*) AS tx_count FROM transactions GROUP BY signer ORDER BY tx_count DESC LIMIT 20;">
+                Top signers (PG)
+              </button>
+
+              <button class="prebuilt-btn" data-db="postgres" data-sql="SELECT DATE_TRUNC('hour', to_timestamp(block_time)) AS hour, COUNT(*) AS count FROM transactions GROUP BY hour ORDER BY hour DESC LIMIT 48;">
+                Hourly tx volume (PG)
+              </button>
+
+              <button class="prebuilt-btn" data-db="clickhouse" data-sql="SELECT instruction_name, sum(total_count) AS total FROM instruction_stats_buffer GROUP BY instruction_name ORDER BY total DESC LIMIT 20;">
+                Instruction stats (CH)
+              </button>
+
+              <button class="prebuilt-btn" data-db="clickhouse" data-sql="SELECT toDate(toDateTime(block_time)) AS date, count() AS tx_count FROM transactions_history GROUP BY date ORDER BY date DESC LIMIT 30;">
+                Daily volume (CH)
+              </button>
+
+              <button class="prebuilt-btn" data-db="clickhouse" data-sql="SELECT signer, count() AS tx_count FROM transactions_history GROUP BY signer ORDER BY tx_count DESC LIMIT 20;">
+                Top signers (CH)
+              </button>
+
+              <button class="prebuilt-btn" data-db="postgres" data-sql="SELECT signature, slot, instruction_name, signer, to_timestamp(block_time) AS time FROM transactions ORDER BY slot DESC LIMIT 10;">
+                Recent transactions (PG)
+              </button>
+
+              <button class="prebuilt-btn" data-db="postgres" data-sql="SELECT key, value AS slot, updated_at FROM checkpoints;">
+                Indexer checkpoint (PG)
+              </button>
+            </div>
+
+            <div style="margin-top:1rem;">
+              <div class="history-header">
+                <span class="history-title">Query History</span>
+                <button class="btn btn-ghost" id="btn-clear-history" style="padding:0.2rem 0.5rem;font-size:0.72rem;">Clear</button>
+              </div>
+              <div class="history-list" id="history-list">
+                <div class="empty-state" style="padding:1.5rem;">
+                  <p>No history yet</p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ── TRANSACTION DETAIL MODAL ─────────────── -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Transaction Detail</h2>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body">
+        <!-- Populated by app.js -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TOAST ─────────────────────────────────── -->
+  <div id="toast"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
