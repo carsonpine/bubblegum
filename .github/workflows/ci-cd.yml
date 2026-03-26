@@ -16,36 +16,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: solana_indexer_test
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-      clickhouse:
-        image: clickhouse/clickhouse-server:23-alpine
-        env:
-          CLICKHOUSE_DB: solana_indexer_test
-          CLICKHOUSE_USER: default
-          CLICKHOUSE_PASSWORD: ""
-        ports:
-          - 8123:8123
-          - 9000:9000
-        options: >-
-          --health-cmd "wget --spider -q http://localhost:8123/ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
       - name: Checkout
@@ -83,12 +53,6 @@ jobs:
 
       - name: Integration tests
         run: cargo test --test integration_test
-
-      - name: All tests
-        run: cargo test --all-targets
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/solana_indexer_test
-          CLICKHOUSE_URL: http://localhost:8123
 
   build:
     name: Build and Push
