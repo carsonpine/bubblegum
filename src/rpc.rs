@@ -1,17 +1,13 @@
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_rpc_client::rpc_config::{
-    RpcTransactionConfig, RpcSignaturesForAddressConfig,
-    RpcTransactionDetails, RpcTransactionStatus,
-};
+use solana_rpc_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
+use solana_rpc_client_api::client_error::Error as RpcClientError;
+use solana_rpc_client_api::config::RpcTransactionConfig;
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
-use solana_transaction_status::{
-    EncodedConfirmedTransactionWithStatusMeta,
-    TransactionSignature,
-};
+use solana_transaction_status::{EncodedConfirmedTransactionWithStatusMeta, UiTransactionEncoding};
+use std::str::FromStr;
 use std::time::Duration;
-use tokio::time::sleep;
 use thiserror::Error;
 
 pub struct RpcService {
@@ -31,44 +27,19 @@ impl RpcService {
         }
     }
 
-    pub async fn get_transactions_by_slot_range(
-        &self,
-        start_slot: u64,
-        end_slot: u64,
-        program_id: &Pubkey,
-    ) -> Result<Vec<EncodedConfirmedTransactionWithStatusMeta>, RpcError> {
-        let mut all_txs = Vec::new();
-        for slot in start_slot..=end_slot {
-            let block = self.client.get_block(slot).await?;
-            for tx in block.transactions {
-                if let Some(meta) = &tx.meta {
-                    let program_ids = tx
-                        .transaction
-                        .message
-                        .account_keys()
-                        .iter()
-                        .map(|key| key.to_string())
-                        .collect::<Vec<_>>();
-                    if program_ids.contains(&program_id.to_string()) {
-                        all_txs.push(tx.clone());
-                    }
-                }
-            }
-            sleep(self.rate_limit).await;
-        }
-        Ok(all_txs)
-    }
-
     pub async fn get_transaction_by_signature(
         &self,
         signature: &Signature,
     ) -> Result<EncodedConfirmedTransactionWithStatusMeta, RpcError> {
         let config = RpcTransactionConfig {
-            encoding: None,
+            encoding: Some(UiTransactionEncoding::Json),
             commitment: Some(CommitmentConfig::confirmed()),
             max_supported_transaction_version: Some(0),
         };
-        let tx = self.client.get_transaction_with_config(signature, config).await?;
+        let tx = self
+            .client
+            .get_transaction_with_config(signature, config)
+            .await?;
         Ok(tx)
     }
 
@@ -77,15 +48,22 @@ impl RpcService {
         address: &Pubkey,
         before: Option<Signature>,
         until: Option<Signature>,
-    ) -> Result<Vec<TransactionSignature>, RpcError> {
-        let config = RpcSignaturesForAddressConfig {
+    ) -> Result<Vec<Signature>, RpcError> {
+        let config = GetConfirmedSignaturesForAddress2Config {
             before,
             until,
             commitment: Some(CommitmentConfig::confirmed()),
             limit: Some(1000),
         };
-        let sigs = self.client.get_signatures_for_address_with_config(address, config).await?;
-        Ok(sigs)
+        let sigs = self
+            .client
+            .get_signatures_for_address_with_config(address, config)
+            .await?;
+        let signatures = sigs
+            .into_iter()
+            .map(|s| Signature::from_str(&s.signature))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(signatures)
     }
 
     pub async fn get_slot(&self) -> Result<u64, RpcError> {
@@ -96,5 +74,7 @@ impl RpcService {
 #[derive(Debug, Error)]
 pub enum RpcError {
     #[error("RPC error: {0}")]
-    Client(#[from] solana_rpc_client::nonblocking::rpc_client::Error),
+    Client(#[from] RpcClientError),
+    #[error("Signature parse error: {0}")]
+    SignatureParse(#[from] solana_sdk::signature::ParseSignatureError),
 }

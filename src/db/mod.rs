@@ -1,5 +1,5 @@
-pub mod postgres;
 pub mod clickhouse;
+pub mod postgres;
 
-pub use postgres::PostgresDb;
 pub use clickhouse::ClickHouseDb;
+pub use postgres::PostgresDb;

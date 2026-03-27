@@ -1,10 +1,9 @@
 use serde::Deserialize;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use solana_rpc_client_api::client_error::Error as RpcClientError;
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::signature::Signer;
 use std::collections::HashMap;
 use std::fs;
-use std::str::FromStr;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,5 +125,5 @@ pub enum IdlError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("RPC error: {0}")]
-    Rpc(#[from] solana_rpc_client::nonblocking::rpc_client::Error),
+    Rpc(#[from] RpcClientError),
 }

@@ -2,9 +2,12 @@ use crate::idl::{Idl, IdlInstruction, IdlField, IdlType};
 use borsh::BorshDeserialize;
 use serde_json::{json, Value};
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::signature::Signature;
-use solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta;
+use solana_transaction_status::{
+    EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction,
+    UiMessage, UiRawMessage,
+};
 use std::collections::HashMap;
+use std::str::FromStr;
 use thiserror::Error;
 
 pub struct Decoder {
@@ -45,28 +48,41 @@ impl Decoder {
         tx: &EncodedConfirmedTransactionWithStatusMeta,
         program_id: &Pubkey,
     ) -> Result<Vec<DecodedInstruction>, DecodeError> {
-        let mut decoded = Vec::new();
-        let signature = tx.transaction.signatures[0].to_string();
+        let ui_tx = match &tx.transaction.transaction {
+            EncodedTransaction::Json(ui_tx) => ui_tx,
+            _ => return Err(DecodeError::UnsupportedTransaction),
+        };
+        let signature = ui_tx.signatures.first().cloned().unwrap_or_default();
+        let raw_msg = match &ui_tx.message {
+            UiMessage::Raw(raw) => raw,
+            _ => return Err(DecodeError::UnsupportedTransaction),
+        };
+
         let slot = tx.slot;
         let timestamp = tx.block_time.unwrap_or(0);
 
-        let message = &tx.transaction.message;
-        let account_keys = message.account_keys();
+        let mut decoded = Vec::new();
 
-        for (ix_idx, ix) in message.instructions().iter().enumerate() {
-            let ix_program_id = &account_keys[ix.program_id_index as usize];
-            if ix_program_id != program_id {
+        for (ix_idx, ix) in raw_msg.instructions.iter().enumerate() {
+            let ix_program_id_str = &raw_msg.account_keys[ix.program_id_index as usize];
+            let ix_program_id = Pubkey::from_str(ix_program_id_str)
+                .map_err(|_| DecodeError::UnsupportedTransaction)?;
+            if &ix_program_id != program_id {
                 continue;
             }
 
-            let discriminator = &ix.data[..std::cmp::min(8, ix.data.len())];
+            let ix_data = bs58::decode(&ix.data)
+                .into_vec()
+                .map_err(|_| DecodeError::UnsupportedTransaction)?;
+            let discriminator = &ix_data[..std::cmp::min(8, ix_data.len())];
             let instruction = self.discriminator_map.get(discriminator)
                 .ok_or(DecodeError::UnknownDiscriminator)?;
 
-            let (signer, accounts) = self.resolve_accounts(&message, &instruction.accounts, ix_idx);
+            let (signer, accounts) = self.resolve_accounts(raw_msg, &instruction.accounts, ix_idx);
 
-            let args = if ix.data.len() > 8 {
-                self.decode_args(&ix.data[8..], &instruction.args)?
+            let args = if ix_data.len() > 8 {
+                let mut data_slice = &ix_data[8..];
+                self.decode_args(&mut data_slice, &instruction.args)?
             } else {
                 json!({})
             };
@@ -88,21 +104,21 @@ impl Decoder {
 
     fn resolve_accounts(
         &self,
-        message: &solana_sdk::message::Message,
+        message: &UiRawMessage,
         account_items: &[crate::idl::IdlAccountItem],
         ix_index: usize,
     ) -> (String, Vec<DecodedAccount>) {
         let mut signer = String::new();
         let mut accounts = Vec::new();
 
-        for item in account_items {
-            let (name, is_mut, is_signer) = match item {
-                crate::idl::IdlAccountItem::Single(name) => (name, false, false),
+        let ix = &message.instructions[ix_index];
+        for (i, item) in account_items.iter().enumerate() {
+            let (_name, is_mut, is_signer) = match item {
+                crate::idl::IdlAccountItem::Single(_name) => (_name, false, false),
                 crate::idl::IdlAccountItem::Detailed(d) => (&d.name, d.is_mut, d.is_signer),
             };
-
-            let key = &message.account_keys[message.instructions()[ix_index].accounts[0] as usize];
-            let pubkey = key.to_string();
+            let key_index = ix.accounts[i] as usize;
+            let pubkey = message.account_keys[key_index].clone();
 
             if is_signer && signer.is_empty() {
                 signer = pubkey.clone();
@@ -118,36 +134,35 @@ impl Decoder {
         (signer, accounts)
     }
 
-    fn decode_args(&self, data: &[u8], fields: &[IdlField]) -> Result<Value, DecodeError> {
-        let mut cursor = std::io::Cursor::new(data);
+    fn decode_args(&self, data: &mut &[u8], fields: &[IdlField]) -> Result<Value, DecodeError> {
         let mut obj = serde_json::Map::new();
 
         for field in fields {
-            let value = self.decode_field(&mut cursor, &field.ty)?;
+            let value = self.decode_field(data, &field.ty)?;
             obj.insert(field.name.clone(), value);
         }
 
         Ok(Value::Object(obj))
     }
 
-    fn decode_field(&self, cursor: &mut std::io::Cursor<&[u8]>, ty: &IdlType) -> Result<Value, DecodeError> {
+    fn decode_field(&self, data: &mut &[u8], ty: &IdlType) -> Result<Value, DecodeError> {
         match ty {
             IdlType::Simple(s) => match s.as_str() {
-                "u8" => Ok(Value::Number(u8::deserialize(cursor)?.into())),
-                "u16" => Ok(Value::Number(u16::deserialize(cursor)?.into())),
-                "u32" => Ok(Value::Number(u32::deserialize(cursor)?.into())),
-                "u64" => Ok(Value::Number(u64::deserialize(cursor)?.into())),
-                "i8" => Ok(Value::Number(i8::deserialize(cursor)?.into())),
-                "i16" => Ok(Value::Number(i16::deserialize(cursor)?.into())),
-                "i32" => Ok(Value::Number(i32::deserialize(cursor)?.into())),
-                "i64" => Ok(Value::Number(i64::deserialize(cursor)?.into())),
-                "bool" => Ok(Value::Bool(bool::deserialize(cursor)?)),
+                "u8" => Ok(Value::Number(u8::deserialize(data)?.into())),
+                "u16" => Ok(Value::Number(u16::deserialize(data)?.into())),
+                "u32" => Ok(Value::Number(u32::deserialize(data)?.into())),
+                "u64" => Ok(Value::Number(u64::deserialize(data)?.into())),
+                "i8" => Ok(Value::Number(i8::deserialize(data)?.into())),
+                "i16" => Ok(Value::Number(i16::deserialize(data)?.into())),
+                "i32" => Ok(Value::Number(i32::deserialize(data)?.into())),
+                "i64" => Ok(Value::Number(i64::deserialize(data)?.into())),
+                "bool" => Ok(Value::Bool(bool::deserialize(data)?)),
                 "string" => {
-                    let s = String::deserialize(cursor)?;
+                    let s = String::deserialize(data)?;
                     Ok(Value::String(s))
                 }
                 "publicKey" => {
-                    let bytes: [u8; 32] = <[u8; 32]>::deserialize(cursor)?;
+                    let bytes: [u8; 32] = <[u8; 32]>::deserialize(data)?;
                     let pubkey = Pubkey::new_from_array(bytes);
                     Ok(Value::String(pubkey.to_string()))
                 }
@@ -157,18 +172,18 @@ impl Decoder {
                 let mut arr = Vec::new();
                 for _ in 0..*size {
                     for inner in array {
-                        let v = self.decode_field(cursor, inner)?;
+                        let v = self.decode_field(data, inner)?;
                         arr.push(v);
                     }
                 }
                 Ok(Value::Array(arr))
             }
             IdlType::Option(inner) => {
-                let tag = u8::deserialize(cursor)?;
+                let tag = u8::deserialize(data)?;
                 if tag == 0 {
                     Ok(Value::Null)
                 } else {
-                    self.decode_field(cursor, inner)
+                    self.decode_field(data, inner)
                 }
             }
             IdlType::Defined(name) => {
@@ -179,18 +194,18 @@ impl Decoder {
                                 crate::idl::IdlTypeDefKind::Struct { fields } => {
                                     let mut obj = serde_json::Map::new();
                                     for f in fields {
-                                        let val = self.decode_field(cursor, &f.ty)?;
+                                        let val = self.decode_field(data, &f.ty)?;
                                         obj.insert(f.name.clone(), val);
                                     }
                                     return Ok(Value::Object(obj));
                                 }
                                 crate::idl::IdlTypeDefKind::Enum { variants } => {
-                                    let variant_idx = u8::deserialize(cursor)?;
+                                    let variant_idx = u8::deserialize(data)?;
                                     if let Some(variant) = variants.get(variant_idx as usize) {
                                         let mut obj = serde_json::Map::new();
                                         if let Some(fields) = &variant.fields {
                                             for f in fields {
-                                                let val = self.decode_field(cursor, &f.ty)?;
+                                                let val = self.decode_field(data, &f.ty)?;
                                                 obj.insert(f.name.clone(), val);
                                             }
                                         }
@@ -205,10 +220,10 @@ impl Decoder {
                 Ok(Value::Null)
             }
             IdlType::Vec(inner) => {
-                let len = u32::deserialize(cursor)?;
+                let len = u32::deserialize(data)?;
                 let mut arr = Vec::with_capacity(len as usize);
                 for _ in 0..len {
-                    let v = self.decode_field(cursor, inner)?;
+                    let v = self.decode_field(data, inner)?;
                     arr.push(v);
                 }
                 Ok(Value::Array(arr))
@@ -223,4 +238,6 @@ pub enum DecodeError {
     UnknownDiscriminator,
     #[error("borsh decode error: {0}")]
     Borsh(#[from] std::io::Error),
+    #[error("unsupported transaction format")]
+    UnsupportedTransaction,
 }

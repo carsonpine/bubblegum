@@ -6,6 +6,8 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
+use sqlx::Column;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
@@ -82,10 +84,9 @@ pub async fn run_api(state: AppState, port: u16) {
 
     let addr = format!("0.0.0.0:{}", port);
     info!("API server listening on {}", addr);
-    axum::Server::bind(&addr.parse().unwrap())
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
 
 async fn get_transaction(
@@ -137,7 +138,7 @@ async fn execute_sql(
     let rows = match query.db.as_str() {
         "postgres" => {
             let rows = sqlx::query(&query.sql)
-                .fetch_all(&state.postgres.pool)
+                .fetch_all(state.postgres.pool())
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
             rows.into_iter()
@@ -156,8 +157,8 @@ async fn execute_sql(
                 .collect()
         }
         "clickhouse" => {
-            let rows = state.clickhouse.execute_query(&query.sql).await
-                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            let rows = state.clickhouse.execute_sql(&query.sql).await
+                .map_err(|e| (StatusCode::NOT_IMPLEMENTED, e.to_string()))?;
             rows
         }
         _ => return Err((StatusCode::BAD_REQUEST, "Invalid database".to_string())),
@@ -174,10 +175,11 @@ async fn execute_sql(
         vec![]
     };
 
+    let row_count = rows.len();
     Ok(Json(SqlQueryResponse {
         columns,
         rows,
-        row_count: rows.len(),
+        row_count,
         execution_time_ms: elapsed,
     }))
 }
@@ -186,7 +188,7 @@ async fn get_stats(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let pg_total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transactions")
-        .fetch_one(&state.postgres.pool)
+        .fetch_one(state.postgres.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -198,7 +200,7 @@ async fn get_stats(
         .unwrap_or(0);
 
     let program_ids: Vec<String> = sqlx::query_scalar("SELECT DISTINCT program_id FROM transactions LIMIT 10")
-        .fetch_all(&state.postgres.pool)
+        .fetch_all(state.postgres.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

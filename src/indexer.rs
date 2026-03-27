@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::decoder::{DecodedInstruction, Decoder};
+use crate::decoder::Decoder;
 use crate::db::clickhouse::{ClickHouseDb, TransactionHistory};
 use crate::db::postgres::PostgresDb;
 use crate::rpc::RpcService;
@@ -57,7 +57,7 @@ impl Indexer {
 
         let mut current_slot = start_slot;
         let mut processed = 0;
-        let mut start_time = Instant::now();
+        let start_time = Instant::now();
 
         *self.running.write().await = true;
 
@@ -96,8 +96,7 @@ impl Indexer {
             }
 
             let mut batch_txs = Vec::new();
-            for sig_info in signatures {
-                let sig = sig_info.signature;
+            for sig in signatures {
                 if let Ok(tx) = self.rpc.get_transaction_by_signature(&sig).await {
                     if tx.slot >= current_slot as u64 && tx.slot <= target_slot {
                         batch_txs.push(tx);
@@ -158,7 +157,7 @@ impl Indexer {
                 let accounts = serde_json::to_value(&instr.accounts)?;
 
                 pg_records.push((signature.clone(), slot, block_time, program_id_str.clone(), signer.clone(),
-                                 instruction_name.clone(), args, accounts, None));
+                                 instruction_name.clone(), args, accounts, None::<serde_json::Value>));
 
                 let accounts_vec: Vec<String> = instr.accounts.iter().map(|a| a.pubkey.clone()).collect();
                 ch_records.push(TransactionHistory {

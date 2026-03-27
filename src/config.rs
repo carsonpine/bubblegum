@@ -20,30 +20,26 @@ impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         dotenvy::dotenv().ok();
 
-        let helius_rpc_url = env::var("HELIUS_RPC_URL")
-            .map_err(|_| ConfigError::MissingEnv("HELIUS_RPC_URL"))?;
+        let helius_rpc_url =
+            env::var("HELIUS_RPC_URL").map_err(|_| ConfigError::MissingEnv("HELIUS_RPC_URL"))?;
         if !helius_rpc_url.starts_with("https://") {
             return Err(ConfigError::InvalidRpcUrl);
         }
 
-        let postgres_url = env::var("POSTGRES_URL")
-            .map_err(|_| ConfigError::MissingEnv("POSTGRES_URL"))?;
+        let postgres_url =
+            env::var("POSTGRES_URL").map_err(|_| ConfigError::MissingEnv("POSTGRES_URL"))?;
 
-        let clickhouse_url = env::var("CLICKHOUSE_URL")
-            .map_err(|_| ConfigError::MissingEnv("CLICKHOUSE_URL"))?;
+        let clickhouse_url =
+            env::var("CLICKHOUSE_URL").map_err(|_| ConfigError::MissingEnv("CLICKHOUSE_URL"))?;
 
-        let program_id_str = env::var("PROGRAM_ID")
-            .map_err(|_| ConfigError::MissingEnv("PROGRAM_ID"))?;
-        let program_id = Pubkey::from_str(&program_id_str)
-            .map_err(|_| ConfigError::InvalidProgramId)?;
+        let program_id_str =
+            env::var("PROGRAM_ID").map_err(|_| ConfigError::MissingEnv("PROGRAM_ID"))?;
+        let program_id =
+            Pubkey::from_str(&program_id_str).map_err(|_| ConfigError::InvalidProgramId)?;
 
-        let start_slot = env::var("START_SLOT")
-            .ok()
-            .and_then(|s| s.parse().ok());
+        let start_slot = env::var("START_SLOT").ok().and_then(|s| s.parse().ok());
 
-        let end_slot = env::var("END_SLOT")
-            .ok()
-            .and_then(|s| s.parse().ok());
+        let end_slot = env::var("END_SLOT").ok().and_then(|s| s.parse().ok());
 
         let batch_size = env::var("BATCH_SIZE")
             .ok()

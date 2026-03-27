@@ -188,47 +188,44 @@ impl PostgresDb {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<TransactionRecord>, PostgresError> {
-        let mut query = String::from(
+        use sqlx::QueryBuilder;
+
+        let mut builder = QueryBuilder::<sqlx::Postgres>::new(
             "SELECT signature, slot, block_time, program_id, signer, instruction_name,
                     instruction_args, accounts, raw_transaction, created_at
-             FROM transactions WHERE 1=1"
+            FROM transactions WHERE 1=1"
         );
 
-        let mut params: Vec<Box<dyn sqlx::Encode<'_, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>>> = Vec::new();
-        let mut param_count = 1;
-
         if let Some(inst) = instruction {
-            query.push_str(&format!(" AND instruction_name = ${}", param_count));
-            params.push(Box::new(inst.to_string()));
-            param_count += 1;
+            builder.push(" AND instruction_name = ");
+            builder.push_bind(inst);
         }
         if let Some(sig) = signer {
-            query.push_str(&format!(" AND signer = ${}", param_count));
-            params.push(Box::new(sig.to_string()));
-            param_count += 1;
+            builder.push(" AND signer = ");
+            builder.push_bind(sig);
         }
         if let Some(start) = start_slot {
-            query.push_str(&format!(" AND slot >= ${}", param_count));
-            params.push(Box::new(start as i64));
-            param_count += 1;
+            builder.push(" AND slot >= ");
+            builder.push_bind(start as i64);
         }
         if let Some(end) = end_slot {
-            query.push_str(&format!(" AND slot <= ${}", param_count));
-            params.push(Box::new(end as i64));
-            param_count += 1;
+            builder.push(" AND slot <= ");
+            builder.push_bind(end as i64);
         }
 
-        query.push_str(&format!(" ORDER BY slot DESC LIMIT ${} OFFSET ${}", param_count, param_count + 1));
-        params.push(Box::new(limit));
-        params.push(Box::new(offset));
+        builder.push(" ORDER BY slot DESC LIMIT ");
+        builder.push_bind(limit);
+        builder.push(" OFFSET ");
+        builder.push_bind(offset);
 
-        let mut q = sqlx::query_as::<_, TransactionRecord>(&query);
-        for p in params {
-            q = q.bind(p);
-        }
-
-        let records = q.fetch_all(&self.pool).await?;
+        let records = builder.build_query_as::<TransactionRecord>()
+            .fetch_all(&self.pool)
+            .await?;
         Ok(records)
+    }
+
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 }
 

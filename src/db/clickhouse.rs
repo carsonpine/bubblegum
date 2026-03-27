@@ -2,7 +2,7 @@ use clickhouse::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClickHouseDb {
     client: Client,
 }
@@ -22,8 +22,6 @@ pub struct TransactionHistory {
 
 impl ClickHouseDb {
     pub async fn new(url: &str) -> Result<Self, ClickHouseError> {
-        // Parse URL and extract credentials if present.
-        // For simplicity, we use default user/password and database.
         let client = Client::default()
             .with_url(url)
             .with_user("indexer")
@@ -80,9 +78,10 @@ impl ClickHouseDb {
         Ok(())
     }
 
-    pub async fn execute_query(&self, sql: &str) -> Result<Vec<serde_json::Value>, ClickHouseError> {
-        let rows = self.client.query(sql).fetch_all::<serde_json::Value>().await?;
-        Ok(rows)
+    pub async fn execute_sql(&self, _sql: &str) -> Result<Vec<serde_json::Value>, ClickHouseError> {
+        Err(ClickHouseError::NotImplemented(
+            "I'm working on that [-_<]".to_string()
+        ))
     }
 
     pub async fn get_total_count(&self) -> Result<u64, ClickHouseError> {
@@ -98,4 +97,6 @@ impl ClickHouseDb {
 pub enum ClickHouseError {
     #[error("clickhouse error: {0}")]
     Client(#[from] clickhouse::error::Error),
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
 }
