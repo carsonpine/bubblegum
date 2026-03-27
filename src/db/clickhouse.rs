@@ -17,22 +17,22 @@ pub struct TransactionHistory {
     pub instruction_name: String,
     pub instruction_args: String,
     pub accounts: Vec<String>,
-    pub transaction_hash: String,
 }
 
 impl ClickHouseDb {
-    pub async fn new(url: &str) -> Result<Self, ClickHouseError> {
+    pub async fn new(url: &str, user: &str, password: &str) -> Result<Self, ClickHouseError> {
         let client = Client::default()
             .with_url(url)
-            .with_user("indexer")
-            .with_password("changeme")
+            .with_user(user)
+            .with_password(password)
             .with_database("solana_indexer");
         Ok(Self { client })
     }
 
     pub async fn init(&self) -> Result<(), ClickHouseError> {
-        self.client.query(
-            r#"
+        self.client
+            .query(
+                r#"
             CREATE TABLE IF NOT EXISTS transactions_history (
                 signature String,
                 slot UInt64,
@@ -41,31 +41,21 @@ impl ClickHouseDb {
                 signer String,
                 instruction_name LowCardinality(String),
                 instruction_args String,
-                accounts Array(String),
-                transaction_hash String
+                accounts Array(String)
             ) ENGINE = MergeTree()
             ORDER BY (program_id, slot, signature)
             "#,
-        ).execute().await?;
-
-        self.client.query(
-            r#"
-            CREATE MATERIALIZED VIEW IF NOT EXISTS instruction_stats_buffer
-            ENGINE = SummingMergeTree()
-            ORDER BY (instruction_name, date)
-            AS SELECT
-                instruction_name,
-                toStartOfDay(toDateTime(block_time)) AS date,
-                count() AS total_count
-            FROM transactions_history
-            GROUP BY instruction_name, date
-            "#,
-        ).execute().await?;
+            )
+            .execute()
+            .await?;
 
         Ok(())
     }
 
-    pub async fn insert_transactions(&self, records: &[TransactionHistory]) -> Result<(), ClickHouseError> {
+    pub async fn insert_transactions(
+        &self,
+        records: &[TransactionHistory],
+    ) -> Result<(), ClickHouseError> {
         if records.is_empty() {
             return Ok(());
         }
@@ -80,12 +70,13 @@ impl ClickHouseDb {
 
     pub async fn execute_sql(&self, _sql: &str) -> Result<Vec<serde_json::Value>, ClickHouseError> {
         Err(ClickHouseError::NotImplemented(
-            "I'm working on that [-_<]".to_string()
+            "I'm working on that [-_<]".to_string(),
         ))
     }
 
     pub async fn get_total_count(&self) -> Result<u64, ClickHouseError> {
-        let count: u64 = self.client
+        let count: u64 = self
+            .client
             .query("SELECT count() FROM transactions_history")
             .fetch_one()
             .await?;

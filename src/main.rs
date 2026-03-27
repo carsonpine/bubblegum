@@ -1,20 +1,20 @@
-mod config;
-mod idl;
-mod rpc;
-mod decoder;
-mod db;
-mod indexer;
 mod api;
+mod config;
+mod db;
+mod decoder;
+mod idl;
+mod indexer;
 mod logging;
+mod rpc;
 
-use config::Config;
-use idl::Idl;
-use rpc::RpcService;
-use decoder::Decoder;
-use db::postgres::PostgresDb;
-use db::clickhouse::ClickHouseDb;
-use indexer::Indexer;
 use api::run_api;
+use config::Config;
+use db::clickhouse::ClickHouseDb;
+use db::postgres::PostgresDb;
+use decoder::Decoder;
+use idl::Idl;
+use indexer::Indexer;
+use rpc::RpcService;
 use std::sync::Arc;
 use tokio::signal;
 
@@ -27,7 +27,9 @@ async fn main() -> Result<(), anyhow::Error> {
     let idl = if let Some(path) = &config.idl_path {
         Idl::from_file(path)?
     } else {
-        let rpc_client = solana_rpc_client::nonblocking::rpc_client::RpcClient::new(config.helius_rpc_url.clone());
+        let rpc_client = solana_rpc_client::nonblocking::rpc_client::RpcClient::new(
+            config.helius_rpc_url.clone(),
+        );
         Idl::from_account(&rpc_client, &config.program_id).await?
     };
 
@@ -35,10 +37,24 @@ async fn main() -> Result<(), anyhow::Error> {
     let rpc = RpcService::new(&config.helius_rpc_url);
     let postgres = Arc::new(PostgresDb::new(&config.postgres_url).await?);
     postgres.init().await?;
-    let clickhouse = Arc::new(ClickHouseDb::new(&config.clickhouse_url).await?);
+    let clickhouse = Arc::new(
+        ClickHouseDb::new(
+            &config.clickhouse_url,
+            &config.clickhouse_user,
+            &config.clickhouse_password,
+        )
+        .await?,
+    );
     clickhouse.init().await?;
 
-    let indexer = Indexer::new(config.clone(), rpc, decoder, postgres.clone(), clickhouse.clone()).await;
+    let indexer = Indexer::new(
+        config.clone(),
+        rpc,
+        decoder,
+        postgres.clone(),
+        clickhouse.clone(),
+    )
+    .await;
 
     let api_state = api::AppState {
         postgres: postgres.clone(),

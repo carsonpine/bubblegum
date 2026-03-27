@@ -10,6 +10,11 @@ use std::str::FromStr;
 use std::time::Duration;
 use thiserror::Error;
 
+pub struct SignatureInfo {
+    pub signature: Signature,
+    pub slot: u64,
+}
+
 pub struct RpcService {
     client: RpcClient,
     rate_limit: Duration,
@@ -17,10 +22,7 @@ pub struct RpcService {
 
 impl RpcService {
     pub fn new(url: &str) -> Self {
-        let client = RpcClient::new_with_commitment(
-            url.to_string(),
-            CommitmentConfig::confirmed(),
-        );
+        let client = RpcClient::new_with_commitment(url.to_string(), CommitmentConfig::confirmed());
         Self {
             client,
             rate_limit: Duration::from_millis(50),
@@ -48,7 +50,7 @@ impl RpcService {
         address: &Pubkey,
         before: Option<Signature>,
         until: Option<Signature>,
-    ) -> Result<Vec<Signature>, RpcError> {
+    ) -> Result<Vec<SignatureInfo>, RpcError> {
         let config = GetConfirmedSignaturesForAddress2Config {
             before,
             until,
@@ -59,11 +61,18 @@ impl RpcService {
             .client
             .get_signatures_for_address_with_config(address, config)
             .await?;
-        let signatures = sigs
+        let result = sigs
             .into_iter()
-            .map(|s| Signature::from_str(&s.signature))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(signatures)
+            .filter_map(|s| {
+                Signature::from_str(&s.signature)
+                    .ok()
+                    .map(|sig| SignatureInfo {
+                        signature: sig,
+                        slot: s.slot,
+                    })
+            })
+            .collect();
+        Ok(result)
     }
 
     pub async fn get_slot(&self) -> Result<u64, RpcError> {

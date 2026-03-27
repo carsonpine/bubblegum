@@ -8,6 +8,8 @@ pub struct Config {
     pub helius_rpc_url: String,
     pub postgres_url: String,
     pub clickhouse_url: String,
+    pub clickhouse_user: String,
+    pub clickhouse_password: String,
     pub program_id: Pubkey,
     pub start_slot: Option<u64>,
     pub end_slot: Option<u64>,
@@ -40,6 +42,8 @@ impl Config {
         let postgres_url = non_empty("POSTGRES_URL")?;
 
         let clickhouse_url = non_empty("CLICKHOUSE_URL")?;
+        let clickhouse_user = optional("CLICKHOUSE_USER").unwrap_or_else(|| "default".to_string());
+        let clickhouse_password = optional("CLICKHOUSE_PASSWORD").unwrap_or_default();
 
         let program_id_str = non_empty("PROGRAM_ID")?;
         let program_id =
@@ -59,6 +63,8 @@ impl Config {
             helius_rpc_url,
             postgres_url,
             clickhouse_url,
+            clickhouse_user,
+            clickhouse_password,
             program_id,
             start_slot,
             end_slot,

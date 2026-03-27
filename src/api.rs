@@ -6,8 +6,8 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use sqlx::Column;
+use sqlx::Row;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
@@ -93,7 +93,9 @@ async fn get_transaction(
     Path(signature): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<TransactionResponse>, (StatusCode, String)> {
-    let record = state.postgres.get_transaction(&signature)
+    let record = state
+        .postgres
+        .get_transaction(&signature)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -110,15 +112,18 @@ async fn list_transactions(
     let limit = filters.limit.unwrap_or(50).min(1000);
     let offset = filters.offset.unwrap_or(0);
 
-    let records = state.postgres.list_transactions(
-        filters.instruction.as_deref(),
-        filters.signer.as_deref(),
-        filters.start_slot,
-        filters.end_slot,
-        limit,
-        offset,
-    ).await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let records = state
+        .postgres
+        .list_transactions(
+            filters.instruction.as_deref(),
+            filters.signer.as_deref(),
+            filters.start_slot,
+            filters.end_slot,
+            limit,
+            offset,
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(records.into_iter().map(Into::into).collect()))
 }
@@ -157,7 +162,10 @@ async fn execute_sql(
                 .collect()
         }
         "clickhouse" => {
-            let rows = state.clickhouse.execute_sql(&query.sql).await
+            let rows = state
+                .clickhouse
+                .execute_sql(&query.sql)
+                .await
                 .map_err(|e| (StatusCode::NOT_IMPLEMENTED, e.to_string()))?;
             rows
         }
@@ -192,17 +200,24 @@ async fn get_stats(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let ch_total = state.clickhouse.get_total_count().await
+    let ch_total = state
+        .clickhouse
+        .get_total_count()
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let last_slot = state.postgres.get_checkpoint("last_indexed_slot").await
+    let last_slot = state
+        .postgres
+        .get_checkpoint("last_indexed_slot")
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .unwrap_or(0);
 
-    let program_ids: Vec<String> = sqlx::query_scalar("SELECT DISTINCT program_id FROM transactions LIMIT 10")
-        .fetch_all(state.postgres.pool())
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let program_ids: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT program_id FROM transactions LIMIT 10")
+            .fetch_all(state.postgres.pool())
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(serde_json::json!({
         "total_transactions": pg_total,

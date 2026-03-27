@@ -73,12 +73,8 @@ pub struct IdlTypeDef {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum IdlTypeDefKind {
-    Struct {
-        fields: Vec<IdlField>,
-    },
-    Enum {
-        variants: Vec<IdlEnumVariant>,
-    },
+    Struct { fields: Vec<IdlField> },
+    Enum { variants: Vec<IdlEnumVariant> },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -118,12 +114,19 @@ impl Idl {
         if data.len() < header_len + 4 {
             return Err(IdlError::InvalidAccountData);
         }
-        let data_len = u32::from_le_bytes(data[header_len..header_len + 4].try_into().unwrap()) as usize;
-        let compressed = &data[header_len + 4..header_len + 4 + data_len];
+        let data_len =
+            u32::from_le_bytes(data[header_len..header_len + 4].try_into().unwrap()) as usize;
+        let data_end = header_len + 4 + data_len;
+        if data_end > data.len() {
+            return Err(IdlError::InvalidAccountData);
+        }
+        let compressed = &data[header_len + 4..data_end];
 
         let mut decoder = ZlibDecoder::new(compressed);
         let mut json = String::new();
-        decoder.read_to_string(&mut json).map_err(|_| IdlError::InvalidAccountData)?;
+        decoder
+            .read_to_string(&mut json)
+            .map_err(|_| IdlError::InvalidAccountData)?;
 
         let idl: Idl = serde_json::from_str(&json)?;
         Ok(idl)

@@ -1,9 +1,9 @@
+use chrono::{DateTime, Utc};
+use serde_json::Value;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::types::Json;
-use serde_json::Value;
-use chrono::{DateTime, Utc};
-use thiserror::Error;
 use std::time::Duration;
+use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub struct PostgresDb {
@@ -61,13 +61,16 @@ impl PostgresDb {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_transactions_signer ON transactions(signer)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_transactions_instruction ON transactions(instruction_name)")
+            .execute(&self.pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_transactions_slot ON transactions(slot)")
+            .execute(&self.pool)
+            .await?;
         sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_transactions_signer ON transactions(signer);
-            CREATE INDEX IF NOT EXISTS idx_transactions_instruction ON transactions(instruction_name);
-            CREATE INDEX IF NOT EXISTS idx_transactions_slot ON transactions(slot);
-            CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
-            "#,
+            "CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at)",
         )
         .execute(&self.pool)
         .await?;
@@ -106,15 +109,7 @@ impl PostgresDb {
                 instruction_name, instruction_args, accounts, raw_transaction
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (signature) DO UPDATE SET
-                slot = EXCLUDED.slot,
-                block_time = EXCLUDED.block_time,
-                program_id = EXCLUDED.program_id,
-                signer = EXCLUDED.signer,
-                instruction_name = EXCLUDED.instruction_name,
-                instruction_args = EXCLUDED.instruction_args,
-                accounts = EXCLUDED.accounts,
-                raw_transaction = EXCLUDED.raw_transaction
+            ON CONFLICT (signature) DO NOTHING
             "#,
         )
         .bind(signature)
@@ -163,7 +158,10 @@ impl PostgresDb {
         Ok(())
     }
 
-    pub async fn get_transaction(&self, signature: &str) -> Result<Option<TransactionRecord>, PostgresError> {
+    pub async fn get_transaction(
+        &self,
+        signature: &str,
+    ) -> Result<Option<TransactionRecord>, PostgresError> {
         let record = sqlx::query_as::<_, TransactionRecord>(
             r#"
             SELECT signature, slot, block_time, program_id, signer, instruction_name,
@@ -193,7 +191,7 @@ impl PostgresDb {
         let mut builder = QueryBuilder::<sqlx::Postgres>::new(
             "SELECT signature, slot, block_time, program_id, signer, instruction_name,
                     instruction_args, accounts, raw_transaction, created_at
-            FROM transactions WHERE 1=1"
+            FROM transactions WHERE 1=1",
         );
 
         if let Some(inst) = instruction {
@@ -218,7 +216,8 @@ impl PostgresDb {
         builder.push(" OFFSET ");
         builder.push_bind(offset);
 
-        let records = builder.build_query_as::<TransactionRecord>()
+        let records = builder
+            .build_query_as::<TransactionRecord>()
             .fetch_all(&self.pool)
             .await?;
         Ok(records)

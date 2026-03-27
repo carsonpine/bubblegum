@@ -1,15 +1,16 @@
 use crate::config::Config;
-use crate::decoder::Decoder;
 use crate::db::clickhouse::{ClickHouseDb, TransactionHistory};
 use crate::db::postgres::PostgresDb;
+use crate::decoder::Decoder;
 use crate::rpc::RpcService;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Signature;
 use solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, info, warn};
 
 pub struct Indexer {
     config: Config,
@@ -56,7 +57,7 @@ impl Indexer {
         info!("Indexer starting from slot {}", start_slot);
 
         let mut current_slot = start_slot;
-        let mut processed = 0;
+        let mut processed = 0usize;
         let start_time = Instant::now();
 
         *self.running.write().await = true;
@@ -80,13 +81,31 @@ impl Indexer {
                 }
             }
 
-            let signatures = self.rpc.get_signatures_for_address(
-                &program_id,
-                None,
-                None,
-            ).await?;
+            // Paginate through all signatures newer than current_slot, oldest-first
+            let mut all_sigs: Vec<Signature> = Vec::new();
+            let mut before: Option<Signature> = None;
+            'fetch: loop {
+                let page = self
+                    .rpc
+                    .get_signatures_for_address(&program_id, before, None)
+                    .await?;
+                if page.is_empty() {
+                    break;
+                }
+                before = page.last().map(|s| s.signature);
+                for sig_info in page {
+                    if sig_info.slot < current_slot as u64 {
+                        break 'fetch;
+                    }
+                    if sig_info.slot <= target_slot {
+                        all_sigs.push(sig_info.signature);
+                    }
+                }
+            }
+            // RPC returns newest-first; reverse to process oldest-first
+            all_sigs.reverse();
 
-            if signatures.is_empty() {
+            if all_sigs.is_empty() {
                 if end_slot.is_none() {
                     sleep(Duration::from_secs(5)).await;
                     continue;
@@ -95,22 +114,32 @@ impl Indexer {
                 }
             }
 
-            let mut batch_txs = Vec::new();
-            for sig in signatures {
-                if let Ok(tx) = self.rpc.get_transaction_by_signature(&sig).await {
-                    if tx.slot >= current_slot as u64 && tx.slot <= target_slot {
+            let mut batch_txs: Vec<EncodedConfirmedTransactionWithStatusMeta> = Vec::new();
+            let mut last_processed_slot = current_slot as u64;
+
+            for sig in all_sigs {
+                match self.rpc.get_transaction_by_signature(&sig).await {
+                    Ok(tx) => {
+                        last_processed_slot = tx.slot;
                         batch_txs.push(tx);
                         if batch_txs.len() >= batch_size {
+                            let batch_last_slot = batch_txs.last().map(|t| t.slot).unwrap();
                             self.process_batch(&batch_txs, &program_id).await?;
                             processed += batch_txs.len();
+                            self.postgres
+                                .update_checkpoint("last_indexed_slot", batch_last_slot as i64)
+                                .await?;
                             batch_txs.clear();
 
                             if processed % 100 == 0 {
                                 let elapsed = start_time.elapsed();
-                                let rate = processed as f64 / elapsed.as_secs_f64();
+                                let rate = processed as f64 / elapsed.as_secs_f64().max(0.001);
                                 info!("Progress: {} txs, rate: {:.1} tx/s", processed, rate);
                             }
                         }
+                    }
+                    Err(e) => {
+                        warn!("Failed to fetch transaction {}: {}", sig, e);
                     }
                 }
             }
@@ -118,15 +147,12 @@ impl Indexer {
             if !batch_txs.is_empty() {
                 self.process_batch(&batch_txs, &program_id).await?;
                 processed += batch_txs.len();
+                self.postgres
+                    .update_checkpoint("last_indexed_slot", last_processed_slot as i64)
+                    .await?;
             }
 
-            let last_processed_slot = batch_txs.last().map(|t| t.slot).unwrap_or(current_slot as u64);
-            self.postgres.update_checkpoint("last_indexed_slot", last_processed_slot as i64).await?;
             current_slot = (last_processed_slot + 1) as i64;
-
-            if end_slot.is_some() && current_slot > end_slot.unwrap() as i64 {
-                break;
-            }
 
             sleep(Duration::from_millis(100)).await;
         }
@@ -141,43 +167,51 @@ impl Indexer {
         txs: &[EncodedConfirmedTransactionWithStatusMeta],
         program_id: &Pubkey,
     ) -> Result<(), anyhow::Error> {
-        let mut pg_records = Vec::new();
         let mut ch_records = Vec::new();
 
         for tx in txs {
-            let decoded = self.decoder.decode_transaction(tx, program_id)?;
+            let decoded = match self.decoder.decode_transaction(tx, program_id) {
+                Ok(d) => d,
+                Err(crate::decoder::DecodeError::UnknownDiscriminator) => {
+                    debug!("Unknown discriminator in tx at slot {}, skipping", tx.slot);
+                    continue;
+                }
+                Err(e) => {
+                    warn!("Failed to decode tx at slot {}: {}", tx.slot, e);
+                    continue;
+                }
+            };
+
             for instr in decoded {
-                let signature = instr.signature.clone();
-                let slot = instr.slot;
-                let block_time = instr.timestamp;
-                let program_id_str = instr.program_id.clone();
-                let signer = instr.signer.clone();
-                let instruction_name = instr.instruction_name.clone();
-                let args = instr.args.clone();
-                let accounts = serde_json::to_value(&instr.accounts)?;
+                let accounts_json = serde_json::to_value(&instr.accounts)?;
+                let accounts_vec: Vec<String> =
+                    instr.accounts.iter().map(|a| a.pubkey.clone()).collect();
 
-                pg_records.push((signature.clone(), slot, block_time, program_id_str.clone(), signer.clone(),
-                                 instruction_name.clone(), args, accounts, None::<serde_json::Value>));
+                self.postgres
+                    .insert_transaction(
+                        &instr.signature,
+                        instr.slot,
+                        instr.timestamp,
+                        &instr.program_id,
+                        &instr.signer,
+                        &instr.instruction_name,
+                        instr.args.clone(),
+                        accounts_json,
+                        None,
+                    )
+                    .await?;
 
-                let accounts_vec: Vec<String> = instr.accounts.iter().map(|a| a.pubkey.clone()).collect();
                 ch_records.push(TransactionHistory {
-                    signature: signature.clone(),
-                    slot,
-                    block_time,
-                    program_id: program_id_str,
-                    signer,
-                    instruction_name,
+                    signature: instr.signature,
+                    slot: instr.slot,
+                    block_time: instr.timestamp,
+                    program_id: instr.program_id,
+                    signer: instr.signer,
+                    instruction_name: instr.instruction_name,
                     instruction_args: instr.args.to_string(),
                     accounts: accounts_vec,
-                    transaction_hash: signature,
                 });
             }
-        }
-
-        for (sig, slot, bt, pid, signer, instr, args, accs, _) in pg_records {
-            self.postgres.insert_transaction(
-                &sig, slot, bt, &pid, &signer, &instr, args, accs, None,
-            ).await?;
         }
 
         self.clickhouse.insert_transactions(&ch_records).await?;

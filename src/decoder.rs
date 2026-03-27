@@ -1,10 +1,9 @@
-use crate::idl::{Idl, IdlInstruction, IdlField, IdlType};
+use crate::idl::{Idl, IdlField, IdlInstruction, IdlType};
 use borsh::BorshDeserialize;
 use serde_json::{json, Value};
 use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::{
-    EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction,
-    UiMessage, UiRawMessage,
+    EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiMessage, UiRawMessage,
 };
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -52,7 +51,11 @@ impl Decoder {
             EncodedTransaction::Json(ui_tx) => ui_tx,
             _ => return Err(DecodeError::UnsupportedTransaction),
         };
-        let signature = ui_tx.signatures.first().cloned().unwrap_or_default();
+        let signature = ui_tx
+            .signatures
+            .first()
+            .cloned()
+            .ok_or(DecodeError::MissingSignature)?;
         let raw_msg = match &ui_tx.message {
             UiMessage::Raw(raw) => raw,
             _ => return Err(DecodeError::UnsupportedTransaction),
@@ -64,7 +67,10 @@ impl Decoder {
         let mut decoded = Vec::new();
 
         for (ix_idx, ix) in raw_msg.instructions.iter().enumerate() {
-            let ix_program_id_str = &raw_msg.account_keys[ix.program_id_index as usize];
+            let ix_program_id_str = raw_msg
+                .account_keys
+                .get(ix.program_id_index as usize)
+                .ok_or(DecodeError::InvalidAccountIndex)?;
             let ix_program_id = Pubkey::from_str(ix_program_id_str)
                 .map_err(|_| DecodeError::UnsupportedTransaction)?;
             if &ix_program_id != program_id {
@@ -74,11 +80,17 @@ impl Decoder {
             let ix_data = bs58::decode(&ix.data)
                 .into_vec()
                 .map_err(|_| DecodeError::UnsupportedTransaction)?;
-            let discriminator = &ix_data[..std::cmp::min(8, ix_data.len())];
-            let instruction = self.discriminator_map.get(discriminator)
+            if ix_data.len() < 8 {
+                return Err(DecodeError::InvalidInstructionData);
+            }
+            let discriminator = &ix_data[..8];
+            let instruction = self
+                .discriminator_map
+                .get(discriminator)
                 .ok_or(DecodeError::UnknownDiscriminator)?;
 
-            let (signer, accounts) = self.resolve_accounts(raw_msg, &instruction.accounts, ix_idx);
+            let (signer, accounts) =
+                self.resolve_accounts(raw_msg, &instruction.accounts, ix_idx)?;
 
             let args = if ix_data.len() > 8 {
                 let mut data_slice = &ix_data[8..];
@@ -107,7 +119,7 @@ impl Decoder {
         message: &UiRawMessage,
         account_items: &[crate::idl::IdlAccountItem],
         ix_index: usize,
-    ) -> (String, Vec<DecodedAccount>) {
+    ) -> Result<(String, Vec<DecodedAccount>), DecodeError> {
         let mut signer = String::new();
         let mut accounts = Vec::new();
 
@@ -117,8 +129,12 @@ impl Decoder {
                 crate::idl::IdlAccountItem::Single(_name) => (_name, false, false),
                 crate::idl::IdlAccountItem::Detailed(d) => (&d.name, d.is_mut, d.is_signer),
             };
-            let key_index = ix.accounts[i] as usize;
-            let pubkey = message.account_keys[key_index].clone();
+            let key_index = *ix.accounts.get(i).ok_or(DecodeError::InvalidAccountIndex)? as usize;
+            let pubkey = message
+                .account_keys
+                .get(key_index)
+                .ok_or(DecodeError::InvalidAccountIndex)?
+                .clone();
 
             if is_signer && signer.is_empty() {
                 signer = pubkey.clone();
@@ -131,7 +147,7 @@ impl Decoder {
             });
         }
 
-        (signer, accounts)
+        Ok((signer, accounts))
     }
 
     fn decode_args(&self, data: &mut &[u8], fields: &[IdlField]) -> Result<Value, DecodeError> {
@@ -209,7 +225,10 @@ impl Decoder {
                                                 obj.insert(f.name.clone(), val);
                                             }
                                         }
-                                        obj.insert("__variant".to_string(), Value::String(variant.name.clone()));
+                                        obj.insert(
+                                            "__variant".to_string(),
+                                            Value::String(variant.name.clone()),
+                                        );
                                         return Ok(Value::Object(obj));
                                     }
                                 }
@@ -240,4 +259,10 @@ pub enum DecodeError {
     Borsh(#[from] std::io::Error),
     #[error("unsupported transaction format")]
     UnsupportedTransaction,
+    #[error("transaction has no signature")]
+    MissingSignature,
+    #[error("account index out of bounds")]
+    InvalidAccountIndex,
+    #[error("instruction data too short for discriminator")]
+    InvalidInstructionData,
 }
