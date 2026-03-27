@@ -21,11 +21,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/solana-indexer /usr/local/bin/solana-indexer
+COPY --from=builder /app/target/release/bubblegum /usr/local/bin/bubblegum
 COPY static ./static
 COPY init.sql /init.sql
 COPY init_ch.sql /init_ch.sql
 
 EXPOSE 3000
 
-CMD ["solana-indexer"]
+CMD ["bubblegum"]
