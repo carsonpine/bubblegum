@@ -1,9 +1,11 @@
+use flate2::read::ZlibDecoder;
 use serde::Deserialize;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client_api::client_error::Error as RpcClientError;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -104,9 +106,26 @@ impl Idl {
     }
 
     pub async fn from_account(client: &RpcClient, program_id: &Pubkey) -> Result<Self, IdlError> {
-        let (pda, _) = Pubkey::find_program_address(&[b"anchor:idl"], program_id);
-        let account = client.get_account_data(&pda).await?;
-        let idl: Idl = serde_json::from_slice(&account)?;
+        // Anchor derives the IDL address via create_with_seed, not find_program_address
+        let (base, _) = Pubkey::find_program_address(&[], program_id);
+        let idl_address = Pubkey::create_with_seed(&base, "anchor:idl", program_id)
+            .map_err(|_| IdlError::InvalidAddress)?;
+
+        let data = client.get_account_data(&idl_address).await?;
+
+        // Account layout: 8-byte discriminator + 32-byte authority + 4-byte length + zlib data
+        let header_len = 8 + 32;
+        if data.len() < header_len + 4 {
+            return Err(IdlError::InvalidAccountData);
+        }
+        let data_len = u32::from_le_bytes(data[header_len..header_len + 4].try_into().unwrap()) as usize;
+        let compressed = &data[header_len + 4..header_len + 4 + data_len];
+
+        let mut decoder = ZlibDecoder::new(compressed);
+        let mut json = String::new();
+        decoder.read_to_string(&mut json).map_err(|_| IdlError::InvalidAccountData)?;
+
+        let idl: Idl = serde_json::from_str(&json)?;
         Ok(idl)
     }
 
@@ -126,4 +145,8 @@ pub enum IdlError {
     Json(#[from] serde_json::Error),
     #[error("RPC error: {0}")]
     Rpc(#[from] RpcClientError),
+    #[error("could not derive IDL account address")]
+    InvalidAddress,
+    #[error("IDL account data is malformed")]
+    InvalidAccountData,
 }
