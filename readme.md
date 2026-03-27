@@ -109,7 +109,7 @@ All configuration is via environment variables (`.env` file or Docker Compose en
 | `PROGRAM_ID`         | ✅       | —               | Solana program public key (base58) to index        |
 | `POSTGRES_URL`       | ✅       | —               | PostgreSQL connection string                       |
 | `CLICKHOUSE_URL`     | ✅       | —               | ClickHouse HTTP URL                               |
-| `CLICKHOUSE_USER`    | ❌       | `indexer`       | ClickHouse username                               |
+| `CLICKHOUSE_USER`    | ❌       | `default`       | ClickHouse username                               |
 | `CLICKHOUSE_PASSWORD`| ❌       | `changeme`      | ClickHouse password                               |
 | `CLICKHOUSE_DB`      | ❌       | `solana_indexer`| ClickHouse database name                          |
 | `START_SLOT`         | ❌       | checkpoint      | Starting slot (resumes from checkpoint if unset)  |
@@ -144,19 +144,16 @@ Response:
   "slot": 200001234,
   "timestamp": 1700000000,
   "program_id": "YourProgramId...",
+  "instruction_name": "swap",
   "instruction": {
-    "name": "swap",
-    "args": {
-      "amount_in": "1000000",
-      "minimum_amount_out": "990000"
-    }
+    "amount_in": "1000000",
+    "minimum_amount_out": "990000"
   },
   "signer": "UserPubkey...",
   "accounts": [
-    { "name": "user", "pubkey": "...", "is_signer": true, "is_writable": true },
-    { "name": "pool", "pubkey": "...", "is_signer": false, "is_writable": true }
-  ],
-  "created_at": "2024-01-01T00:00:00Z"
+    { "pubkey": "...", "is_signer": true, "is_writable": true },
+    { "pubkey": "...", "is_signer": false, "is_writable": true }
+  ]
 }
 ```
 
@@ -209,21 +206,22 @@ curl http://localhost:3000/stats
 }
 ```
 
-### `POST /query`
+### `POST /api/sql`
 
 Execute a read-only SQL query against PostgreSQL or ClickHouse.
 
 ```bash
-curl -X POST http://localhost:3000/query \
+curl -X POST http://localhost:3000/api/sql \
   -H "Content-Type: application/json" \
   -d '{
-    "sql": "SELECT instruction_name, COUNT(*) FROM transactions GROUP BY instruction_name ORDER BY count DESC",
-    "database": "postgres"
+    "db": "postgres",
+    "sql": "SELECT instruction_name, COUNT(*) FROM transactions GROUP BY instruction_name ORDER BY count DESC"
   }'
 ```
 
 ```json
 {
+  "columns": ["instruction_name", "count"],
   "rows": [
     { "instruction_name": "swap", "count": "9821" },
     { "instruction_name": "deposit", "count": "3204" }

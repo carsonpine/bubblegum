@@ -41,7 +41,9 @@ services:
     environment:
       HELIUS_RPC_URL: ${HELIUS_RPC_URL}
       POSTGRES_URL: postgres://indexer:changeme@postgres:5432/solana_indexer
-      CLICKHOUSE_URL: http://indexer:changeme@clickhouse:8123/solana_indexer
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: indexer
+      CLICKHOUSE_PASSWORD: changeme
       PROGRAM_ID: ${PROGRAM_ID}
       START_SLOT: ${START_SLOT}
       END_SLOT: ${END_SLOT}
