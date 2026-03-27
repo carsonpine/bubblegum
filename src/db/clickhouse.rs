@@ -1,11 +1,15 @@
-use anyhow::{Context, Result};
-use clickhouse::{Client, Row};
-use serde::{Deserialize, Serialize};
+use clickhouse_rs::{Block, ClientHandle, Pool};
+use clickhouse_rs::types::{Column, Complex, Row};
+use std::time::Duration;
+use thiserror::Error;
 
-use crate::decoder::DecodedInstruction;
+#[derive(Debug, Clone)]
+pub struct ClickHouseDb {
+    pool: Pool,
+}
 
-#[derive(Debug, Clone, Row, Serialize, Deserialize)]
-pub struct TransactionHistoryRow {
+#[derive(Debug)]
+pub struct TransactionHistory {
     pub signature: String,
     pub slot: u64,
     pub block_time: i64,
@@ -17,211 +21,97 @@ pub struct TransactionHistoryRow {
     pub transaction_hash: String,
 }
 
-#[derive(Clone)]
-pub struct ClickhouseDb {
-    client: Client,
-    database: String,
-    batch_size: usize,
-}
-
-impl ClickhouseDb {
-    pub fn new(url: &str, user: &str, password: &str, database: &str, batch_size: usize) -> Self {
-        let client = Client::default()
-            .with_url(url)
-            .with_user(user)
-            .with_password(password)
-            .with_database(database);
-
-        ClickhouseDb {
-            client,
-            database: database.to_string(),
-            batch_size,
-        }
+impl ClickHouseDb {
+    pub async fn new(url: &str) -> Result<Self, ClickHouseError> {
+        let pool = Pool::new(url.parse()?);
+        let mut client = pool.get_handle().await?;
+        client.ping().await?;
+        Ok(Self { pool })
     }
 
-    pub async fn ping(&self) -> Result<()> {
-        self.client
-            .query("SELECT 1")
-            .fetch_one::<u8>()
-            .await
-            .context("ClickHouse ping failed")?;
+    pub async fn init(&self) -> Result<(), ClickHouseError> {
+        let mut client = self.pool.get_handle().await?;
 
-        tracing::info!("Connected to ClickHouse (database='{}')", self.database);
+        client.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS transactions_history (
+                signature String,
+                slot UInt64,
+                block_time Int64,
+                program_id String,
+                signer String,
+                instruction_name LowCardinality(String),
+                instruction_args String,
+                accounts Array(String),
+                transaction_hash String
+            ) ENGINE = MergeTree()
+            ORDER BY (program_id, slot, signature)
+            "#,
+        ).await?;
+
+        client.execute(
+            r#"
+            CREATE MATERIALIZED VIEW IF NOT EXISTS mv_instruction_stats
+            ENGINE = SummingMergeTree()
+            ORDER BY (instruction_name, date)
+            AS SELECT
+                instruction_name,
+                toStartOfDay(toDateTime(block_time)) AS date,
+                count() AS total_count
+            FROM transactions_history
+            GROUP BY instruction_name, date
+            "#,
+        ).await?;
 
         Ok(())
     }
 
-    pub async fn init_tables(&self) -> Result<()> {
-        self.client
-            .query(
-                "CREATE TABLE IF NOT EXISTS transactions_history (
-                    signature String,
-                    slot UInt64,
-                    block_time Int64,
-                    program_id String,
-                    signer String,
-                    instruction_name LowCardinality(String),
-                    instruction_args String,
-                    accounts Array(String),
-                    transaction_hash String
-                ) ENGINE = MergeTree()
-                ORDER BY (program_id, slot, signature)",
-            )
-            .execute()
-            .await
-            .context("Failed to create ClickHouse transactions_history table")?;
-
-        tracing::info!("ClickHouse tables initialized");
-
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub async fn insert_transaction(&self, decoded: &DecodedInstruction) -> Result<()> {
-        self.insert_transactions_batch(std::slice::from_ref(decoded))
-            .await
-    }
-
-    pub async fn insert_transactions_batch(
-        &self,
-        transactions: &[DecodedInstruction],
-    ) -> Result<()> {
-        if transactions.is_empty() {
+    pub async fn insert_transactions(&self, records: &[TransactionHistory]) -> Result<(), ClickHouseError> {
+        if records.is_empty() {
             return Ok(());
         }
 
-        let chunks: Vec<&[DecodedInstruction]> = transactions.chunks(self.batch_size).collect();
+        let mut client = self.pool.get_handle().await?;
+        let mut block = Block::new();
 
-        for chunk in chunks {
-            let mut inserter = self
-                .client
-                .insert("transactions_history")
-                .context("Failed to create ClickHouse inserter")?;
+        block = block
+            .column("signature", records.iter().map(|r| r.signature.clone()).collect::<Vec<_>>())
+            .column("slot", records.iter().map(|r| r.slot).collect::<Vec<_>>())
+            .column("block_time", records.iter().map(|r| r.block_time).collect::<Vec<_>>())
+            .column("program_id", records.iter().map(|r| r.program_id.clone()).collect::<Vec<_>>())
+            .column("signer", records.iter().map(|r| r.signer.clone()).collect::<Vec<_>>())
+            .column("instruction_name", records.iter().map(|r| r.instruction_name.clone()).collect::<Vec<_>>())
+            .column("instruction_args", records.iter().map(|r| r.instruction_args.clone()).collect::<Vec<_>>())
+            .column("accounts", records.iter().map(|r| r.accounts.clone()).collect::<Vec<_>>())
+            .column("transaction_hash", records.iter().map(|r| r.transaction_hash.clone()).collect::<Vec<_>>());
 
-            for decoded in chunk {
-                let args_str =
-                    serde_json::to_string(&decoded.args).unwrap_or_else(|_| "{}".to_string());
-
-                let accounts_str: Vec<String> = decoded
-                    .accounts
-                    .iter()
-                    .map(|a| format!("{}:{}", a.name, a.pubkey))
-                    .collect();
-
-                let row = TransactionHistoryRow {
-                    signature: decoded.signature.clone(),
-                    slot: decoded.slot,
-                    block_time: decoded.timestamp,
-                    program_id: decoded.program_id.clone(),
-                    signer: decoded.signer.clone(),
-                    instruction_name: decoded.instruction_name.clone(),
-                    instruction_args: args_str,
-                    accounts: accounts_str,
-                    transaction_hash: decoded.signature.clone(),
-                };
-
-                inserter.write(&row).await.with_context(|| {
-                    format!(
-                        "Failed to write transaction {} to ClickHouse",
-                        decoded.signature
-                    )
-                })?;
-            }
-
-            inserter
-                .end()
-                .await
-                .context("Failed to finalize ClickHouse batch insert")?;
-        }
+        client.insert("transactions_history", block).await?;
 
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub async fn get_instruction_stats(&self) -> Result<Vec<InstructionStatRow>> {
-        let rows = self
-            .client
-            .query(
-                r#"
-                SELECT
-                    instruction_name,
-                    date,
-                    sum(total_count) AS total_count
-                FROM instruction_stats_buffer
-                GROUP BY instruction_name, date
-                ORDER BY date DESC, total_count DESC
-                LIMIT 100
-                "#,
-            )
-            .fetch_all::<InstructionStatRow>()
-            .await
-            .context("Failed to query instruction stats from ClickHouse")?;
-
-        Ok(rows)
+    pub async fn execute_query(&self, sql: &str) -> Result<Vec<Row>, ClickHouseError> {
+        let mut client = self.pool.get_handle().await?;
+        let block = client.query(sql).fetch_all().await?;
+        Ok(block.rows().collect())
     }
 
-    pub async fn execute_raw_query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
-        let rows: Vec<serde_json::Value> = self
-            .client
-            .query(sql)
-            .fetch_all::<String>()
-            .await
-            .context("Failed to execute raw ClickHouse query")?
-            .into_iter()
-            .map(|row_str| {
-                serde_json::from_str::<serde_json::Value>(&row_str)
-                    .unwrap_or(serde_json::Value::String(row_str))
-            })
-            .collect();
-
-        Ok(rows)
-    }
-
-    pub async fn get_total_count(&self) -> Result<u64> {
-        let count: u64 = self
-            .client
-            .query("SELECT count() FROM transactions_history")
-            .fetch_one::<u64>()
-            .await
-            .context("Failed to count ClickHouse transactions")?;
-
-        Ok(count)
-    }
-
-    #[allow(dead_code)]
-    pub async fn get_recent_transactions(&self, limit: u64) -> Result<Vec<TransactionHistoryRow>> {
-        let rows = self
-            .client
-            .query(&format!(
-                r#"
-                SELECT
-                    signature,
-                    slot,
-                    block_time,
-                    program_id,
-                    signer,
-                    instruction_name,
-                    instruction_args,
-                    accounts,
-                    transaction_hash
-                FROM transactions_history
-                ORDER BY slot DESC
-                LIMIT {}
-                "#,
-                limit
-            ))
-            .fetch_all::<TransactionHistoryRow>()
-            .await
-            .context("Failed to fetch recent ClickHouse transactions")?;
-
-        Ok(rows)
+    pub async fn get_total_count(&self) -> Result<u64, ClickHouseError> {
+        let mut client = self.pool.get_handle().await?;
+        let block = client.query("SELECT count() FROM transactions_history").fetch_all().await?;
+        if let Some(row) = block.rows().next() {
+            let count: u64 = row.get(0)?;
+            Ok(count)
+        } else {
+            Ok(0)
+        }
     }
 }
 
-#[derive(Debug, Clone, Row, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct InstructionStatRow {
-    pub instruction_name: String,
-    pub date: u32,
-    pub total_count: u64,
+#[derive(Debug, Error)]
+pub enum ClickHouseError {
+    #[error("clickhouse error: {0}")]
+    Driver(#[from] clickhouse_rs::errors::Error),
+    #[error("url parse error: {0}")]
+    UrlParse(#[from] url::ParseError),
 }

@@ -1,616 +1,452 @@
-const API_BASE = window.location.origin;
-const POLL_INTERVAL_MS = 5000;
-const PAGE_SIZE = 50;
+// API base URL
+const API_BASE = '/api';
 
-const state = {
-  page: 0,
-  filters: {},
-  transactions: [],
-  sortKey: "slot",
-  sortDir: "desc",
-  sqlRunning: false,
-  lastQueryResult: null,
+// State
+let currentPage = 1;
+let currentFilters = {
+  instruction: '',
+  signer: '',
+  start_slot: '',
+  end_slot: '',
 };
+let currentSort = { column: 'slot', order: 'desc' };
+let totalRows = 0;
+let pollingInterval = null;
 
-// ── DOM REFS ──────────────────────────────────────────────────────
+// DOM elements
+const txBody = document.getElementById('tx-body');
+const txCountSpan = document.getElementById('tx-count');
+const statTotal = document.getElementById('stat-total');
+const statSlot = document.getElementById('stat-slot');
+const statPrograms = document.getElementById('stat-programs');
+const statChTotal = document.getElementById('stat-ch-total');
+const filterInstruction = document.getElementById('filter-instruction');
+const filterSigner = document.getElementById('filter-signer');
+const filterStartSlot = document.getElementById('filter-start-slot');
+const filterEndSlot = document.getElementById('filter-end-slot');
+const btnFilter = document.getElementById('btn-filter');
+const btnReset = document.getElementById('btn-reset');
+const btnPrev = document.getElementById('btn-prev');
+const btnNext = document.getElementById('btn-next');
+const pageLabel = document.getElementById('page-label');
+const btnExportCsv = document.getElementById('btn-export-csv');
+const modalOverlay = document.getElementById('modal-overlay');
+const modalBody = document.getElementById('modal-body');
+const modalClose = document.getElementById('modal-close');
 
-const el = (id) => document.getElementById(id);
+// SQL tool elements
+const dbSelect = document.getElementById('db-select');
+const sqlInput = document.getElementById('sql-input');
+const btnRunSql = document.getElementById('btn-run-sql');
+const btnClearSql = document.getElementById('btn-clear-sql');
+const btnExportJson = document.getElementById('btn-export-json');
+const resultsInfo = document.getElementById('results-info');
+const resultsTime = document.getElementById('results-time');
+const resultsTableWrap = document.getElementById('results-table-wrap');
+const historyList = document.getElementById('history-list');
+const btnClearHistory = document.getElementById('btn-clear-history');
 
-const txBody = el("tx-body");
-const txCount = el("tx-count");
-const pageLabel = el("page-label");
-const modalOverlay = el("modal-overlay");
-const modalBody = el("modal-body");
-const toastEl = el("toast");
+// Prebuilt query buttons
+const prebuiltBtns = document.querySelectorAll('.prebuilt-btn');
 
-// ── INIT ─────────────────────────────────────────────────────────
+// Toast
+const toast = document.getElementById('toast');
 
-document.addEventListener("DOMContentLoaded", () => {
-  initTabs();
-  initFilters();
-  initPagination();
-  initSortHeaders();
-  initModal();
-  initSqlTool();
-  initPrebuiltQueries();
-  initQueryHistory();
-  initExports();
-
-  loadTransactions();
-  loadStats();
-
-  setInterval(() => {
-    loadTransactions();
-    loadStats();
-  }, POLL_INTERVAL_MS);
-});
-
-// ── TABS ──────────────────────────────────────────────────────────
-
-function initTabs() {
-  document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const target = btn.dataset.tab;
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
-      btn.classList.add("active");
-      el(`tab-${target}`).classList.add("active");
-    });
-  });
+// Helper functions
+function showToast(message, type = 'info') {
+  toast.textContent = message;
+  toast.className = `visible toast-${type}`;
+  setTimeout(() => {
+    toast.classList.remove('visible');
+  }, 3000);
 }
 
-// ── STATS ─────────────────────────────────────────────────────────
-
-async function loadStats() {
+async function fetchStats() {
   try {
-    const data = await apiFetch("/stats");
-    el("stat-total").textContent = formatNumber(data.postgres.total_transactions);
-    el("stat-slot").textContent = formatNumber(data.postgres.last_indexed_slot);
-    el("stat-programs").textContent = formatNumber(data.postgres.programs_indexed);
-    el("stat-ch-total").textContent = formatNumber(data.clickhouse_total);
-  } catch (e) {
-    console.error("Failed to load stats:", e);
+    const res = await fetch(`${API_BASE}/stats`);
+    if (!res.ok) throw new Error('Failed to fetch stats');
+    const data = await res.json();
+    statTotal.textContent = data.total_transactions.toLocaleString();
+    statSlot.textContent = data.last_indexed_slot.toLocaleString();
+    statPrograms.textContent = data.programs.length;
+    statChTotal.textContent = data.clickhouse_total.toLocaleString();
+  } catch (err) {
+    console.error('Stats error:', err);
   }
 }
 
-// ── TRANSACTIONS ──────────────────────────────────────────────────
+async function fetchTransactions(page = 1) {
+  const limit = 50;
+  const offset = (page - 1) * limit;
 
-function initFilters() {
-  el("btn-filter").addEventListener("click", () => {
-    state.page = 0;
-    state.filters = buildFilters();
-    loadTransactions();
-  });
+  let url = `${API_BASE}/transactions?limit=${limit}&offset=${offset}`;
+  if (currentFilters.instruction) url += `&instruction=${encodeURIComponent(currentFilters.instruction)}`;
+  if (currentFilters.signer) url += `&signer=${encodeURIComponent(currentFilters.signer)}`;
+  if (currentFilters.start_slot) url += `&start_slot=${currentFilters.start_slot}`;
+  if (currentFilters.end_slot) url += `&end_slot=${currentFilters.end_slot}`;
 
-  el("btn-reset").addEventListener("click", () => {
-    el("filter-instruction").value = "";
-    el("filter-signer").value = "";
-    el("filter-start-slot").value = "";
-    el("filter-end-slot").value = "";
-    state.filters = {};
-    state.page = 0;
-    loadTransactions();
-  });
-
-  ["filter-instruction", "filter-signer", "filter-start-slot", "filter-end-slot"].forEach((id) => {
-    el(id).addEventListener("keydown", (e) => {
-      if (e.key === "Enter") el("btn-filter").click();
-    });
-  });
-}
-
-function buildFilters() {
-  const f = {};
-  const instruction = el("filter-instruction").value.trim();
-  const signer = el("filter-signer").value.trim();
-  const startSlot = el("filter-start-slot").value.trim();
-  const endSlot = el("filter-end-slot").value.trim();
-  if (instruction) f.instruction = instruction;
-  if (signer) f.signer = signer;
-  if (startSlot) f.start_slot = parseInt(startSlot, 10);
-  if (endSlot) f.end_slot = parseInt(endSlot, 10);
-  return f;
-}
-
-function initPagination() {
-  el("btn-prev").addEventListener("click", () => {
-    if (state.page > 0) {
-      state.page--;
-      loadTransactions();
-    }
-  });
-
-  el("btn-next").addEventListener("click", () => {
-    if (state.transactions.length === PAGE_SIZE) {
-      state.page++;
-      loadTransactions();
-    }
-  });
-}
-
-function initSortHeaders() {
-  document.querySelectorAll("thead th[data-sort]").forEach((th) => {
-    th.addEventListener("click", () => {
-      const key = th.dataset.sort;
-      if (state.sortKey === key) {
-        state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
-      } else {
-        state.sortKey = key;
-        state.sortDir = "desc";
-      }
-      state.page = 0;
-      loadTransactions();
-    });
-  });
-}
-
-async function loadTransactions() {
-  const params = new URLSearchParams({
-    limit: PAGE_SIZE,
-    offset: state.page * PAGE_SIZE,
-    ...state.filters,
-  });
-
-  txBody.innerHTML = `<tr class="loading-row"><td colspan="5"><span class="loading-spinner"></span></td></tr>`;
+  // sort not supported by backend yet; we'll keep as is
 
   try {
-    const data = await apiFetch(`/transactions?${params}`);
-    state.transactions = data;
-    renderTransactions(data);
-    txCount.textContent = `${data.length} rows`;
-    pageLabel.textContent = `Page ${state.page + 1}`;
-    el("btn-prev").disabled = state.page === 0;
-    el("btn-next").disabled = data.length < PAGE_SIZE;
-  } catch (e) {
-    txBody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--error);padding:2rem;">${escapeHtml(e.message)}</td></tr>`;
-    showToast(`Failed to load transactions: ${e.message}`, "error");
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to fetch transactions');
+    const txs = await res.json();
+    totalRows = txs.length; // not ideal, but we'll handle pagination with next/prev only
+    renderTable(txs);
+    txCountSpan.textContent = totalRows;
+    pageLabel.textContent = `Page ${page}`;
+  } catch (err) {
+    console.error('Transactions error:', err);
+    showToast('Failed to load transactions', 'error');
   }
 }
 
-function renderTransactions(transactions) {
-  if (transactions.length === 0) {
-    txBody.innerHTML = `
-      <tr><td colspan="5">
-        <div class="empty-state">
-          <div class="empty-icon">🌸</div>
-          <p>No transactions found</p>
-        </div>
-      </td></tr>
-    `;
+function renderTable(transactions) {
+  if (!txBody) return;
+  if (!transactions.length) {
+    txBody.innerHTML = '<tr><td colspan="5">No transactions found</td></tr>';
     return;
   }
 
-  txBody.innerHTML = transactions
-    .map(
-      (tx) => `
-      <tr data-sig="${escapeHtml(tx.signature)}">
-        <td class="mono" title="${escapeHtml(tx.signature)}">${truncate(tx.signature, 16)}</td>
-        <td class="mono">${formatNumber(tx.slot)}</td>
-        <td><span class="badge badge-pink">${escapeHtml(tx.instruction.name)}</span></td>
-        <td class="mono" title="${escapeHtml(tx.signer)}">${truncate(tx.signer, 14)}</td>
-        <td>${tx.timestamp ? formatTime(tx.timestamp) : "—"}</td>
-      </tr>
-    `
-    )
-    .join("");
+  txBody.innerHTML = transactions.map(tx => `
+    <tr data-signature="${tx.signature}">
+      <td class="mono">${tx.signature.slice(0, 8)}…</td>
+      <td>${tx.slot}</td>
+      <td><span class="badge badge-pink">${tx.instruction.name}</span></td>
+      <td class="mono">${tx.signer.slice(0, 8)}…</td>
+      <td>${new Date(tx.timestamp * 1000).toLocaleString()}</td>
+    </tr>
+  `).join('');
 
-  txBody.querySelectorAll("tr").forEach((row) => {
-    row.addEventListener("click", () => {
-      const sig = row.dataset.sig;
-      if (sig) openTransactionModal(sig);
+  // Add click handlers
+  document.querySelectorAll('#tx-body tr').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const sig = tr.dataset.signature;
+      if (sig) showTransactionDetail(sig);
     });
   });
 }
 
-// ── MODAL ─────────────────────────────────────────────────────────
-
-function initModal() {
-  el("modal-close").addEventListener("click", closeModal);
-  modalOverlay.addEventListener("click", (e) => {
-    if (e.target === modalOverlay) closeModal();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeModal();
-  });
-}
-
-async function openTransactionModal(signature) {
-  modalBody.innerHTML = `<div style="text-align:center;padding:2rem"><span class="loading-spinner"></span></div>`;
-  modalOverlay.classList.add("visible");
-
+async function showTransactionDetail(signature) {
   try {
-    const tx = await apiFetch(`/transaction/${signature}`);
-    renderModalContent(tx);
-  } catch (e) {
-    modalBody.innerHTML = `<div style="color:var(--error);padding:1rem">${escapeHtml(e.message)}</div>`;
-  }
-}
+    const res = await fetch(`${API_BASE}/transaction/${signature}`);
+    if (!res.ok) throw new Error('Transaction not found');
+    const tx = await res.json();
 
-function renderModalContent(tx) {
-  const accountsArr = Array.isArray(tx.accounts)
-    ? tx.accounts
-    : Object.values(tx.accounts || {});
-
-  modalBody.innerHTML = `
-    <div class="detail-section">
-      <div class="detail-section-title">Overview</div>
-      <div class="detail-grid">
-        <div class="detail-field">
-          <div class="field-label">Signature</div>
-          <div class="field-value">${escapeHtml(tx.signature)}</div>
-        </div>
-        <div class="detail-field">
-          <div class="field-label">Slot</div>
-          <div class="field-value">${formatNumber(tx.slot)}</div>
-        </div>
-        <div class="detail-field">
-          <div class="field-label">Instruction</div>
-          <div class="field-value"><span class="badge badge-pink">${escapeHtml(tx.instruction.name)}</span></div>
-        </div>
-        <div class="detail-field">
-          <div class="field-label">Signer</div>
-          <div class="field-value">${escapeHtml(tx.signer)}</div>
-        </div>
-        <div class="detail-field">
-          <div class="field-label">Program</div>
-          <div class="field-value">${escapeHtml(tx.program_id)}</div>
-        </div>
-        <div class="detail-field">
-          <div class="field-label">Timestamp</div>
-          <div class="field-value">${tx.timestamp ? formatTime(tx.timestamp) : "—"}</div>
+    modalBody.innerHTML = `
+      <div class="detail-section">
+        <div class="detail-section-title">Signature</div>
+        <div class="json-block">${tx.signature}</div>
+      </div>
+      <div class="detail-section">
+        <div class="detail-section-title">Details</div>
+        <div class="detail-grid">
+          <div class="detail-field"><div class="field-label">Slot</div><div class="field-value">${tx.slot}</div></div>
+          <div class="detail-field"><div class="field-label">Time</div><div class="field-value">${new Date(tx.timestamp * 1000).toLocaleString()}</div></div>
+          <div class="detail-field"><div class="field-label">Program</div><div class="field-value">${tx.program_id}</div></div>
+          <div class="detail-field"><div class="field-label">Signer</div><div class="field-value">${tx.signer}</div></div>
         </div>
       </div>
-    </div>
-
-    <div class="detail-section">
-      <div class="detail-section-title">Instruction Args</div>
-      <div class="json-block">${syntaxHighlight(tx.instruction.args)}</div>
-    </div>
-
-    ${
-      accountsArr.length > 0
-        ? `
+      <div class="detail-section">
+        <div class="detail-section-title">Instruction: ${tx.instruction.name}</div>
+        <div class="json-block">${JSON.stringify(tx.instruction.args, null, 2)}</div>
+      </div>
       <div class="detail-section">
         <div class="detail-section-title">Accounts</div>
-        <div class="json-block">${syntaxHighlight(accountsArr)}</div>
-      </div>`
-        : ""
-    }
-  `;
+        <div class="json-block">${JSON.stringify(tx.accounts, null, 2)}</div>
+      </div>
+    `;
+    modalOverlay.classList.add('visible');
+  } catch (err) {
+    console.error('Detail error:', err);
+    showToast('Failed to load transaction details', 'error');
+  }
 }
 
 function closeModal() {
-  modalOverlay.classList.remove("visible");
+  modalOverlay.classList.remove('visible');
 }
 
-// ── SQL TOOL ──────────────────────────────────────────────────────
-
-function initSqlTool() {
-  el("btn-run-sql").addEventListener("click", runSqlQuery);
-  el("sql-input").addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-      e.preventDefault();
-      runSqlQuery();
-    }
-  });
-  el("btn-clear-sql").addEventListener("click", () => {
-    el("sql-input").value = "";
-  });
-}
-
-async function runSqlQuery() {
-  if (state.sqlRunning) return;
-
-  const sql = el("sql-input").value.trim();
+// SQL query execution
+async function runSql() {
+  const db = dbSelect.value;
+  const sql = sqlInput.value.trim();
   if (!sql) {
-    showToast("Please enter a SQL query", "error");
+    showToast('Please enter a SQL query', 'warning');
     return;
   }
 
-  const database = el("db-select").value;
-  state.sqlRunning = true;
-  el("sql-run-label").textContent = "Running…";
-  el("btn-run-sql").disabled = true;
+  // Add to history
+  addToHistory(db, sql);
 
-  const wrap = el("results-table-wrap");
-  wrap.innerHTML = `<div class="empty-state"><span class="loading-spinner"></span></div>`;
-  el("results-info").textContent = "Executing…";
-  el("results-time").textContent = "";
+  // Show loading
+  resultsInfo.textContent = 'Executing...';
+  resultsTime.textContent = '';
+  resultsTableWrap.innerHTML = '<div class="empty-state"><div class="empty-icon">⏳</div><p>Running query...</p></div>';
 
   try {
-    const result = await apiFetch("/query", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sql, database }),
-    });
-
-    state.lastQueryResult = result;
-    renderQueryResults(result);
-    addToQueryHistory(sql, database, result.row_count, result.execution_time_ms);
-  } catch (e) {
-    wrap.innerHTML = `<div class="empty-state"><p style="color:var(--error)">${escapeHtml(e.message)}</p></div>`;
-    el("results-info").textContent = "Query failed";
-    showToast(e.message, "error");
-  } finally {
-    state.sqlRunning = false;
-    el("sql-run-label").textContent = "▶ Run";
-    el("btn-run-sql").disabled = false;
+    const url = `${API_BASE}/sql?db=${encodeURIComponent(db)}&sql=${encodeURIComponent(sql)}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(errText);
+    }
+    const data = await res.json();
+    resultsInfo.textContent = `${data.row_count} rows returned`;
+    resultsTime.textContent = `${data.execution_time_ms} ms`;
+    renderSqlResults(data.columns, data.rows);
+  } catch (err) {
+    console.error('SQL error:', err);
+    resultsInfo.textContent = 'Error';
+    resultsTime.textContent = '';
+    resultsTableWrap.innerHTML = `<div class="empty-state"><div class="empty-icon">❌</div><p>${err.message}</p></div>`;
+    showToast(err.message, 'error');
   }
 }
 
-function renderQueryResults(result) {
-  el("results-info").textContent = `${result.row_count} rows`;
-  el("results-time").textContent = `${result.execution_time_ms}ms`;
-
-  const wrap = el("results-table-wrap");
-
-  if (result.rows.length === 0) {
-    wrap.innerHTML = `<div class="empty-state"><div class="empty-icon">📭</div><p>Query returned 0 rows</p></div>`;
+function renderSqlResults(columns, rows) {
+  if (!rows.length) {
+    resultsTableWrap.innerHTML = '<div class="empty-state"><div class="empty-icon">📭</div><p>No results</p></div>';
     return;
   }
 
-  const columns = Object.keys(result.rows[0]);
+  const table = document.createElement('table');
+  table.className = 'results-table';
+  table.style.width = '100%';
+  table.style.borderCollapse = 'collapse';
 
-  const headerHtml = columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("");
-  const bodyHtml = result.rows
-    .map((row) => {
-      const cells = columns
-        .map((c) => {
-          const val = row[c];
-          const display =
-            val === null || val === undefined
-              ? '<span style="color:var(--text-dim)">null</span>'
-              : typeof val === "object"
-              ? `<span class="mono" style="font-size:0.72rem">${escapeHtml(JSON.stringify(val))}</span>`
-              : escapeHtml(String(val));
-          return `<td>${display}</td>`;
-        })
-        .join("");
-      return `<tr>${cells}</tr>`;
-    })
-    .join("");
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  columns.forEach(col => {
+    const th = document.createElement('th');
+    th.textContent = col;
+    th.style.padding = '0.5rem';
+    th.style.textAlign = 'left';
+    th.style.borderBottom = '1px solid var(--border)';
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
 
-  wrap.innerHTML = `
-    <table>
-      <thead><tr>${headerHtml}</tr></thead>
-      <tbody>${bodyHtml}</tbody>
-    </table>
-  `;
-}
-
-// ── PREBUILT QUERIES ──────────────────────────────────────────────
-
-function initPrebuiltQueries() {
-  document.querySelectorAll(".prebuilt-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      el("sql-input").value = btn.dataset.sql;
-      el("db-select").value = btn.dataset.db;
-
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
-      document.querySelector('[data-tab="sql"]').classList.add("active");
-      el("tab-sql").classList.add("active");
-
-      runSqlQuery();
+  const tbody = document.createElement('tbody');
+  rows.forEach(row => {
+    const tr = document.createElement('tr');
+    columns.forEach(col => {
+      const td = document.createElement('td');
+      td.style.padding = '0.5rem';
+      td.style.borderBottom = '1px solid var(--border)';
+      const val = row[col];
+      if (val === null || val === undefined) td.textContent = 'null';
+      else if (typeof val === 'object') td.textContent = JSON.stringify(val);
+      else td.textContent = String(val);
+      tr.appendChild(td);
     });
+    tbody.appendChild(tr);
   });
+  table.appendChild(tbody);
+
+  resultsTableWrap.innerHTML = '';
+  resultsTableWrap.appendChild(table);
 }
 
-// ── QUERY HISTORY ─────────────────────────────────────────────────
-
-const HISTORY_KEY = "bubblegum_query_history";
-const MAX_HISTORY = 30;
-
-function initQueryHistory() {
-  renderQueryHistory();
-
-  el("btn-clear-history").addEventListener("click", () => {
-    localStorage.removeItem(HISTORY_KEY);
-    renderQueryHistory();
-    showToast("History cleared", "info");
-  });
+function addToHistory(db, sql) {
+  let history = JSON.parse(localStorage.getItem('sql_history') || '[]');
+  history.unshift({ db, sql, timestamp: Date.now() });
+  if (history.length > 20) history.pop();
+  localStorage.setItem('sql_history', JSON.stringify(history));
+  renderHistory();
 }
 
-function addToQueryHistory(sql, db, rowCount, timeMs) {
-  const history = getQueryHistory();
-  const entry = {
-    sql,
-    db,
-    rowCount,
-    timeMs,
-    ts: Date.now(),
-  };
-  history.unshift(entry);
-  const trimmed = history.slice(0, MAX_HISTORY);
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(trimmed));
-  renderQueryHistory();
-}
-
-function getQueryHistory() {
-  try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
-  } catch {
-    return [];
-  }
-}
-
-function renderQueryHistory() {
-  const list = el("history-list");
-  const history = getQueryHistory();
-
-  if (history.length === 0) {
-    list.innerHTML = `<div class="empty-state" style="padding:1.5rem;"><p>No history yet</p></div>`;
+function renderHistory() {
+  const history = JSON.parse(localStorage.getItem('sql_history') || '[]');
+  if (!history.length) {
+    historyList.innerHTML = '<div class="empty-state" style="padding:1.5rem;"><p>No history yet</p></div>';
     return;
   }
 
-  list.innerHTML = history
-    .map(
-      (entry, i) => `
-      <div class="history-item" data-index="${i}">
-        <div class="history-sql">${escapeHtml(entry.sql)}</div>
-        <div class="history-meta">
-          <span>${entry.db}</span>
-          <span>${entry.rowCount} rows</span>
-          <span>${entry.timeMs}ms</span>
-          <span>${timeAgo(entry.ts)}</span>
-        </div>
-      </div>
-    `
-    )
-    .join("");
+  historyList.innerHTML = history.map(item => `
+    <div class="history-item" data-db="${item.db}" data-sql="${escapeHtml(item.sql)}">
+      <div class="history-sql">${item.sql.slice(0, 60)}${item.sql.length > 60 ? '…' : ''}</div>
+      <div class="history-meta">${item.db} · ${new Date(item.timestamp).toLocaleString()}</div>
+    </div>
+  `).join('');
 
-  list.querySelectorAll(".history-item").forEach((item) => {
-    item.addEventListener("click", () => {
-      const entry = history[parseInt(item.dataset.index, 10)];
-      el("sql-input").value = entry.sql;
-      el("db-select").value = entry.db;
+  document.querySelectorAll('.history-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const db = el.dataset.db;
+      const sql = unescapeHtml(el.dataset.sql);
+      dbSelect.value = db;
+      sqlInput.value = sql;
     });
   });
 }
 
-// ── EXPORTS ───────────────────────────────────────────────────────
-
-function initExports() {
-  el("btn-export-csv").addEventListener("click", () => {
-    if (state.transactions.length === 0) {
-      showToast("No transactions to export", "error");
-      return;
-    }
-    exportToCsv(state.transactions);
-  });
-
-  el("btn-export-json").addEventListener("click", () => {
-    if (!state.lastQueryResult || state.lastQueryResult.rows.length === 0) {
-      showToast("No query results to export", "error");
-      return;
-    }
-    exportToJson(state.lastQueryResult.rows);
-  });
+function clearHistory() {
+  localStorage.removeItem('sql_history');
+  renderHistory();
+  showToast('History cleared', 'info');
 }
-
-function exportToCsv(rows) {
-  if (rows.length === 0) return;
-  const cols = ["signature", "slot", "instruction", "signer", "timestamp"];
-  const lines = [
-    cols.join(","),
-    ...rows.map((r) =>
-      [
-        csvEscape(r.signature),
-        r.slot,
-        csvEscape(r.instruction?.name || ""),
-        csvEscape(r.signer),
-        r.timestamp || "",
-      ].join(",")
-    ),
-  ];
-  downloadFile(lines.join("\n"), "transactions.csv", "text/csv");
-  showToast("CSV downloaded", "success");
-}
-
-function exportToJson(rows) {
-  downloadFile(JSON.stringify(rows, null, 2), "query_results.json", "application/json");
-  showToast("JSON downloaded", "success");
-}
-
-function downloadFile(content, filename, mime) {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function csvEscape(val) {
-  if (val == null) return "";
-  const s = String(val);
-  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
-  return s;
-}
-
-// ── API ───────────────────────────────────────────────────────────
-
-async function apiFetch(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, options);
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try {
-      const body = await res.json();
-      msg = body.error || msg;
-    } catch (_) {}
-    throw new Error(msg);
-  }
-  return res.json();
-}
-
-// ── TOAST ─────────────────────────────────────────────────────────
-
-let toastTimer = null;
-
-function showToast(message, type = "info") {
-  toastEl.textContent = message;
-  toastEl.className = `toast-${type}`;
-  toastEl.classList.add("visible");
-
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toastEl.classList.remove("visible");
-  }, 3500);
-}
-
-// ── UTILS ─────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
-  if (str == null) return "";
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  return str.replace(/[&<>]/g, function(m) {
+    if (m === '&') return '&amp;';
+    if (m === '<') return '&lt;';
+    if (m === '>') return '&gt;';
+    return m;
+  });
 }
 
-function truncate(str, len) {
-  if (!str) return "";
-  return str.length > len ? str.slice(0, len) + "…" : str;
+function unescapeHtml(str) {
+  return str.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 }
 
-function formatNumber(n) {
-  if (n == null) return "—";
-  return Number(n).toLocaleString();
+function exportCsv() {
+  // Build query to export current filtered view (up to 1000 rows)
+  let url = `${API_BASE}/transactions?limit=1000&offset=0`;
+  if (currentFilters.instruction) url += `&instruction=${encodeURIComponent(currentFilters.instruction)}`;
+  if (currentFilters.signer) url += `&signer=${encodeURIComponent(currentFilters.signer)}`;
+  if (currentFilters.start_slot) url += `&start_slot=${currentFilters.start_slot}`;
+  if (currentFilters.end_slot) url += `&end_slot=${currentFilters.end_slot}`;
+
+  fetch(url)
+    .then(res => res.json())
+    .then(txs => {
+      if (!txs.length) {
+        showToast('No data to export', 'warning');
+        return;
+      }
+      const headers = ['signature', 'slot', 'timestamp', 'program_id', 'instruction_name', 'signer', 'accounts'];
+      const rows = txs.map(tx => [
+        tx.signature,
+        tx.slot,
+        new Date(tx.timestamp * 1000).toISOString(),
+        tx.program_id,
+        tx.instruction.name,
+        tx.signer,
+        JSON.stringify(tx.accounts)
+      ]);
+      const csvContent = [headers, ...rows].map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `transactions_${new Date().toISOString()}.csv`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    })
+    .catch(err => {
+      console.error('Export error:', err);
+      showToast('Failed to export', 'error');
+    });
 }
 
-function formatTime(unixTs) {
-  const d = new Date(unixTs * 1000);
-  return d.toLocaleString();
-}
-
-function timeAgo(ts) {
-  const diff = Date.now() - ts;
-  const secs = Math.floor(diff / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
-function syntaxHighlight(json) {
-  if (json == null) return "null";
-  let str;
-  try {
-    str = typeof json === "string" ? json : JSON.stringify(json, null, 2);
-  } catch {
-    return String(json);
+function exportJson() {
+  const db = dbSelect.value;
+  const sql = sqlInput.value.trim();
+  if (!sql) {
+    showToast('No query to export', 'warning');
+    return;
   }
-  return escapeHtml(str)
-    .replace(/"([^"]+)":/g, '<span style="color:var(--pink-soft)">"$1"</span>:')
-    .replace(/: "([^"]*)"/g, ': <span style="color:var(--pink-pale)">"$1"</span>')
-    .replace(/: (\d+)/g, ': <span style="color:var(--success)">$1</span>')
-    .replace(/: (true|false)/g, ': <span style="color:var(--warning)">$1</span>')
-    .replace(/: (null)/g, ': <span style="color:var(--text-dim)">$1</span>');
+  const url = `${API_BASE}/sql?db=${encodeURIComponent(db)}&sql=${encodeURIComponent(sql)}`;
+  fetch(url)
+    .then(res => res.json())
+    .then(data => {
+      const json = JSON.stringify(data, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `query_${new Date().toISOString()}.json`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    })
+    .catch(err => {
+      console.error('Export error:', err);
+      showToast('Failed to export', 'error');
+    });
 }
+
+// Event listeners
+btnFilter.addEventListener('click', () => {
+  currentFilters = {
+    instruction: filterInstruction.value,
+    signer: filterSigner.value,
+    start_slot: filterStartSlot.value,
+    end_slot: filterEndSlot.value,
+  };
+  currentPage = 1;
+  fetchTransactions(currentPage);
+});
+
+btnReset.addEventListener('click', () => {
+  filterInstruction.value = '';
+  filterSigner.value = '';
+  filterStartSlot.value = '';
+  filterEndSlot.value = '';
+  currentFilters = { instruction: '', signer: '', start_slot: '', end_slot: '' };
+  currentPage = 1;
+  fetchTransactions(currentPage);
+});
+
+btnPrev.addEventListener('click', () => {
+  if (currentPage > 1) {
+    currentPage--;
+    fetchTransactions(currentPage);
+  }
+});
+
+btnNext.addEventListener('click', () => {
+  if (totalRows === 50) {
+    currentPage++;
+    fetchTransactions(currentPage);
+  } else {
+    showToast('No more pages', 'info');
+  }
+});
+
+btnExportCsv.addEventListener('click', exportCsv);
+
+modalClose.addEventListener('click', closeModal);
+modalOverlay.addEventListener('click', (e) => {
+  if (e.target === modalOverlay) closeModal();
+});
+
+btnRunSql.addEventListener('click', runSql);
+btnClearSql.addEventListener('click', () => { sqlInput.value = ''; });
+btnExportJson.addEventListener('click', exportJson);
+btnClearHistory.addEventListener('click', clearHistory);
+
+prebuiltBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const db = btn.dataset.db;
+    const sql = btn.dataset.sql;
+    if (db && sql) {
+      dbSelect.value = db;
+      sqlInput.value = sql;
+    }
+  });
+});
+
+// Tab switching
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tabId = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById(`tab-${tabId}`).classList.add('active');
+  });
+});
+
+// Initial load
+fetchStats();
+fetchTransactions(1);
+pollingInterval = setInterval(() => {
+  fetchStats();
+  if (document.querySelector('.tab-btn.active').dataset.tab === 'transactions') {
+    fetchTransactions(currentPage);
+  }
+}, 5000);
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+  if (pollingInterval) clearInterval(pollingInterval);
+});

@@ -1,291 +1,219 @@
-use anyhow::Result;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Json, Response},
-    routing::{get, post},
+    response::Json,
+    routing::get,
     Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tower_http::{
-    cors::{Any, CorsLayer},
-    services::ServeDir,
-    trace::TraceLayer,
-};
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
+use tracing::info;
 
-use crate::db::postgres::{DbStats, TransactionFilters};
-use crate::db::{ClickhouseDb, PostgresDb};
+use crate::db::clickhouse::ClickHouseDb;
+use crate::db::postgres::PostgresDb;
 
 #[derive(Clone)]
 pub struct AppState {
     pub postgres: Arc<PostgresDb>,
-    pub clickhouse: Arc<ClickhouseDb>,
+    pub clickhouse: Arc<ClickHouseDb>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
+pub struct TransactionFilters {
+    instruction: Option<String>,
+    signer: Option<String>,
+    start_slot: Option<u64>,
+    end_slot: Option<u64>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct TransactionResponse {
     pub signature: String,
-    pub slot: i64,
-    pub timestamp: Option<i64>,
+    pub slot: u64,
+    pub timestamp: i64,
     pub program_id: String,
-    pub instruction: InstructionResponse,
+    pub instruction: serde_json::Value,
     pub signer: String,
     pub accounts: serde_json::Value,
-    pub created_at: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct InstructionResponse {
-    pub name: String,
-    pub args: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ListTransactionsQuery {
-    pub instruction: Option<String>,
-    pub signer: Option<String>,
-    pub start_slot: Option<i64>,
-    pub end_slot: Option<i64>,
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SqlQueryRequest {
-    pub sql: String,
-    pub database: String,
+impl From<crate::db::postgres::TransactionRecord> for TransactionResponse {
+    fn from(record: crate::db::postgres::TransactionRecord) -> Self {
+        Self {
+            signature: record.signature,
+            slot: record.slot as u64,
+            timestamp: record.block_time,
+            program_id: record.program_id,
+            instruction: record.instruction_args.0,
+            signer: record.signer,
+            accounts: record.accounts.0,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
 pub struct SqlQueryResponse {
-    pub rows: Vec<serde_json::Value>,
-    pub row_count: usize,
-    pub execution_time_ms: u128,
+    columns: Vec<String>,
+    rows: Vec<serde_json::Value>,
+    row_count: usize,
+    execution_time_ms: u64,
 }
 
-#[derive(Debug, Serialize)]
-pub struct StatsResponse {
-    pub postgres: DbStats,
-    pub clickhouse_total: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ErrorResponse {
-    pub error: String,
-}
-
-impl IntoResponse for ErrorResponse {
-    fn into_response(self) -> Response {
-        let status = StatusCode::INTERNAL_SERVER_ERROR;
-        (status, Json(self)).into_response()
-    }
-}
-
-fn map_err(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
-    tracing::error!(error = %e, "API handler error");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ErrorResponse {
-            error: e.to_string(),
-        }),
-    )
-}
-
-pub fn build_router(state: AppState) -> Router {
+pub async fn run_api(state: AppState, port: u16) {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    Router::new()
-        .route("/transaction/:signature", get(get_transaction))
-        .route("/transactions", get(list_transactions))
-        .route("/stats", get(get_stats))
-        .route("/query", post(execute_sql_query))
-        .route("/health", get(health_check))
-        .nest_service("/", ServeDir::new("static"))
+    let static_files = ServeDir::new("static");
+
+    let app = Router::new()
+        .route("/api/transaction/:signature", get(get_transaction))
+        .route("/api/transactions", get(list_transactions))
+        .route("/api/sql", get(execute_sql))
+        .route("/api/stats", get(get_stats))
+        .nest_service("/", static_files)
         .layer(cors)
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .with_state(state);
+
+    let addr = format!("0.0.0.0:{}", port);
+    info!("API server listening on {}", addr);
+    axum::Server::bind(&addr.parse().unwrap())
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
 }
 
 async fn get_transaction(
     Path(signature): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<TransactionResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let row = state
-        .postgres
-        .get_transaction(&signature)
+) -> Result<Json<TransactionResponse>, (StatusCode, String)> {
+    let record = state.postgres.get_transaction(&signature)
         .await
-        .map_err(map_err)?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    match row {
-        None => Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Transaction '{}' not found", signature),
-            }),
-        )),
-        Some(row) => {
-            let response = TransactionResponse {
-                signature: row.signature,
-                slot: row.slot,
-                timestamp: row.block_time,
-                program_id: row.program_id,
-                instruction: InstructionResponse {
-                    name: row.instruction_name,
-                    args: row.instruction_args.unwrap_or(serde_json::Value::Null),
-                },
-                signer: row.signer,
-                accounts: row.accounts.unwrap_or(serde_json::Value::Array(vec![])),
-                created_at: row.created_at.map(|dt| dt.to_rfc3339()),
-            };
-            Ok(Json(response))
-        }
+    match record {
+        Some(r) => Ok(Json(r.into())),
+        None => Err((StatusCode::NOT_FOUND, "Transaction not found".to_string())),
     }
 }
 
 async fn list_transactions(
-    Query(params): Query<ListTransactionsQuery>,
+    Query(filters): Query<TransactionFilters>,
     State(state): State<AppState>,
-) -> Result<Json<Vec<TransactionResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    let filters = TransactionFilters {
-        instruction: params.instruction,
-        signer: params.signer,
-        start_slot: params.start_slot,
-        end_slot: params.end_slot,
-        limit: params.limit,
-        offset: params.offset,
+) -> Result<Json<Vec<TransactionResponse>>, (StatusCode, String)> {
+    let limit = filters.limit.unwrap_or(50).min(1000);
+    let offset = filters.offset.unwrap_or(0);
+
+    let records = state.postgres.list_transactions(
+        filters.instruction.as_deref(),
+        filters.signer.as_deref(),
+        filters.start_slot,
+        filters.end_slot,
+        limit,
+        offset,
+    ).await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(records.into_iter().map(Into::into).collect()))
+}
+
+#[derive(Debug, Deserialize)]
+struct SqlQuery {
+    db: String,
+    sql: String,
+}
+
+async fn execute_sql(
+    Query(query): Query<SqlQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<SqlQueryResponse>, (StatusCode, String)> {
+    let start = std::time::Instant::now();
+
+    let rows = match query.db.as_str() {
+        "postgres" => {
+            let rows = sqlx::query(&query.sql)
+                .fetch_all(&state.postgres.pool)
+                .await
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            rows.into_iter()
+                .map(|row| {
+                    let mut obj = serde_json::Map::new();
+                    for (i, col) in row.columns().iter().enumerate() {
+                        let value: Result<serde_json::Value, _> = row.try_get(i);
+                        if let Ok(v) = value {
+                            obj.insert(col.name().to_string(), v);
+                        } else {
+                            obj.insert(col.name().to_string(), serde_json::Value::Null);
+                        }
+                    }
+                    serde_json::Value::Object(obj)
+                })
+                .collect()
+        }
+        "clickhouse" => {
+            let ch_rows = state.clickhouse.execute_query(&query.sql).await
+                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            ch_rows.into_iter()
+                .map(|row| {
+                    let mut obj = serde_json::Map::new();
+                    for (name, value) in row.into_iter() {
+                        obj.insert(name, value);
+                    }
+                    serde_json::Value::Object(obj)
+                })
+                .collect()
+        }
+        _ => return Err((StatusCode::BAD_REQUEST, "Invalid database".to_string())),
     };
 
-    let rows = state
-        .postgres
-        .list_transactions(&filters)
-        .await
-        .map_err(map_err)?;
+    let elapsed = start.elapsed().as_millis() as u64;
+    let columns = if let Some(first) = rows.first() {
+        if let Some(obj) = first.as_object() {
+            obj.keys().cloned().collect()
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
 
-    let responses: Vec<TransactionResponse> = rows
-        .into_iter()
-        .map(|row| TransactionResponse {
-            signature: row.signature,
-            slot: row.slot,
-            timestamp: row.block_time,
-            program_id: row.program_id,
-            instruction: InstructionResponse {
-                name: row.instruction_name,
-                args: row.instruction_args.unwrap_or(serde_json::Value::Null),
-            },
-            signer: row.signer,
-            accounts: row.accounts.unwrap_or(serde_json::Value::Array(vec![])),
-            created_at: row.created_at.map(|dt| dt.to_rfc3339()),
-        })
-        .collect();
-
-    Ok(Json(responses))
+    Ok(Json(SqlQueryResponse {
+        columns,
+        rows,
+        row_count: rows.len(),
+        execution_time_ms: elapsed,
+    }))
 }
 
 async fn get_stats(
     State(state): State<AppState>,
-) -> Result<Json<StatsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let pg_stats = state.postgres.get_stats().await.map_err(map_err)?;
-
-    let ch_total = state.clickhouse.get_total_count().await.unwrap_or(0);
-
-    Ok(Json(StatsResponse {
-        postgres: pg_stats,
-        clickhouse_total: ch_total,
-    }))
-}
-
-async fn execute_sql_query(
-    State(state): State<AppState>,
-    Json(payload): Json<SqlQueryRequest>,
-) -> Result<Json<SqlQueryResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let sql = payload.sql.trim();
-
-    if sql.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "SQL query cannot be empty".to_string(),
-            }),
-        ));
-    }
-
-    let sql_upper = sql.to_uppercase();
-    let is_write = sql_upper.starts_with("INSERT")
-        || sql_upper.starts_with("UPDATE")
-        || sql_upper.starts_with("DELETE")
-        || sql_upper.starts_with("DROP")
-        || sql_upper.starts_with("TRUNCATE")
-        || sql_upper.starts_with("ALTER")
-        || sql_upper.starts_with("CREATE");
-
-    if is_write {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Only SELECT queries are permitted via the SQL tool".to_string(),
-            }),
-        ));
-    }
-
-    let start = std::time::Instant::now();
-
-    let rows = match payload.database.to_lowercase().as_str() {
-        "clickhouse" | "ch" => state
-            .clickhouse
-            .execute_raw_query(sql)
-            .await
-            .map_err(map_err)?,
-        "postgres" | "pg" | "postgresql" => state
-            .postgres
-            .execute_raw_query(sql)
-            .await
-            .map_err(map_err)?,
-        other => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Unknown database '{}'. Valid values: 'postgres', 'clickhouse'",
-                        other
-                    ),
-                }),
-            ));
-        }
-    };
-
-    let execution_time_ms = start.elapsed().as_millis();
-    let row_count = rows.len();
-
-    Ok(Json(SqlQueryResponse {
-        rows,
-        row_count,
-        execution_time_ms,
-    }))
-}
-
-async fn health_check() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "status": "ok",
-        "service": "bubblegum-indexer"
-    }))
-}
-
-pub async fn serve(state: AppState, port: u16) -> Result<()> {
-    let app = build_router(state);
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr)
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let pg_total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transactions")
+        .fetch_one(&state.postgres.pool)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to bind API server to {}: {}", addr, e))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    tracing::info!("API server listening on http://{}", addr);
+    let ch_total = state.clickhouse.get_total_count().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    axum::serve(listener, app)
+    let last_slot = state.postgres.get_checkpoint("last_indexed_slot").await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .unwrap_or(0);
+
+    let program_ids: Vec<String> = sqlx::query_scalar("SELECT DISTINCT program_id FROM transactions LIMIT 10")
+        .fetch_all(&state.postgres.pool)
         .await
-        .map_err(|e| anyhow::anyhow!("API server error: {}", e))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(())
+    Ok(Json(serde_json::json!({
+        "total_transactions": pg_total,
+        "last_indexed_slot": last_slot,
+        "programs": program_ids,
+        "clickhouse_total": ch_total,
+    })))
 }

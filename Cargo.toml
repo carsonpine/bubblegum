@@ -1,65 +1,41 @@
 [package]
-name = "bubblegum"
+name = "solana-indexer"
 version = "0.1.0"
 edition = "2021"
-authors = ["Bubblegum Indexer"]
-description = "Production-grade Solana Program Indexer with dual-database architecture"
-
-[[bin]]
-name = "bubblegum"
-path = "src/main.rs"
 
 [dependencies]
-solana-sdk = "2.1"
-solana-rpc-client = "2.1"
-solana-rpc-client-api = "2.1"
-solana-transaction-status = "2.1"
+solana-sdk = "1.18"
+solana-rpc-client = "1.18"
+solana-transaction-status = "1.18"
+anchor-client = "0.30"
+anchor-lang = "0.30"
 
 tokio = { version = "1.35", features = ["full"] }
 async-trait = "0.1"
-flate2 = "1.0"
-envy = "0.4"
-rand = "0.9"
 
 axum = { version = "0.7", features = ["macros"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
 
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json", "chrono", "macros", "migrate"] }
-clickhouse = { version = "0.13" }
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "json"] }
+clickhouse-rs = "1.1"
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-borsh = { version = "1.3", features = ["derive"] }
+borsh = "1.3"
+borsh-derive = "1.3"
 
 config = "0.14"
 dotenvy = "0.15"
 
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 thiserror = "1.0"
 anyhow = "1.0"
 bs58 = "0.5"
-chrono = { version = "0.4", features = ["serde"] }
-hex = "0.4"
-base64 = "0.21"
-reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
-tokio-util = { version = "0.7", features = ["full"] }
-futures = "0.3"
-once_cell = "1.19"
+chrono = "0.4"
 
 [profile.release]
 opt-level = 3
 lto = true
-codegen-units = 1
-panic = "abort"
-
-[profile.dev]
-opt-level = 0
-debug = true
-
-[dev-dependencies]
-tokio = { version = "1.35", features = ["full", "test-util"] }
-mockall = "0.13"
-pretty_assertions = "1.4"

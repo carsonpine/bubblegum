@@ -1,172 +1,170 @@
-use anyhow::{Context, Result};
+use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::types::Json;
+use serde_json::Value;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgPoolOptions, Column, FromRow, PgPool, Row, ValueRef};
+use thiserror::Error;
 use std::time::Duration;
-
-use crate::decoder::DecodedInstruction;
-
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct TransactionRow {
-    pub signature: String,
-    pub slot: i64,
-    pub block_time: Option<i64>,
-    pub program_id: String,
-    pub signer: String,
-    pub instruction_name: String,
-    pub instruction_args: Option<serde_json::Value>,
-    pub accounts: Option<serde_json::Value>,
-    pub raw_transaction: Option<serde_json::Value>,
-    pub created_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Default)]
-pub struct TransactionFilters {
-    pub instruction: Option<String>,
-    pub signer: Option<String>,
-    pub start_slot: Option<i64>,
-    pub end_slot: Option<i64>,
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
-}
 
 #[derive(Debug, Clone)]
 pub struct PostgresDb {
     pool: PgPool,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+pub struct TransactionRecord {
+    pub signature: String,
+    pub slot: i64,
+    pub block_time: i64,
+    pub program_id: String,
+    pub signer: String,
+    pub instruction_name: String,
+    pub instruction_args: Json<Value>,
+    pub accounts: Json<Value>,
+    pub raw_transaction: Option<Json<Value>>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct Checkpoint {
+    pub key: String,
+    pub value: i64,
+    pub updated_at: DateTime<Utc>,
+}
+
 impl PostgresDb {
-    pub async fn connect(url: &str, max_connections: u32) -> Result<Self> {
+    pub async fn new(url: &str) -> Result<Self, PostgresError> {
         let pool = PgPoolOptions::new()
-            .max_connections(max_connections)
-            .acquire_timeout(Duration::from_secs(10))
+            .max_connections(10)
+            .acquire_timeout(Duration::from_secs(5))
             .connect(url)
-            .await
-            .with_context(|| format!("Failed to connect to PostgreSQL at: {}", url))?;
-
-        sqlx::query("SELECT 1")
-            .fetch_one(&pool)
-            .await
-            .context("PostgreSQL health check failed")?;
-
-        tracing::info!(
-            "Connected to PostgreSQL (max_connections={})",
-            max_connections
-        );
-
-        Ok(PostgresDb { pool })
+            .await?;
+        Ok(Self { pool })
     }
 
-    #[allow(dead_code)]
-    pub async fn run_migrations(&self) -> Result<()> {
-        sqlx::migrate!("./migrations")
-            .run(&self.pool)
-            .await
-            .context("Failed to run PostgreSQL migrations")?;
-        tracing::info!("PostgreSQL migrations applied");
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn pool(&self) -> &PgPool {
-        &self.pool
-    }
-
-    #[allow(dead_code)]
-    pub async fn insert_transaction(
-        &self,
-        decoded: &DecodedInstruction,
-        raw_tx_json: Option<serde_json::Value>,
-    ) -> Result<()> {
-        let accounts_json = serde_json::to_value(&decoded.accounts)
-            .context("Failed to serialize decoded accounts")?;
+    pub async fn init(&self) -> Result<(), PostgresError> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS transactions (
+                signature VARCHAR(88) PRIMARY KEY,
+                slot BIGINT NOT NULL,
+                block_time BIGINT,
+                program_id VARCHAR(44) NOT NULL,
+                signer VARCHAR(44) NOT NULL,
+                instruction_name VARCHAR(255) NOT NULL,
+                instruction_args JSONB,
+                accounts JSONB,
+                raw_transaction JSONB,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(
             r#"
-            INSERT INTO transactions
-                (signature, slot, block_time, program_id, signer, instruction_name,
-                 instruction_args, accounts, raw_transaction)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (signature) DO NOTHING
+            CREATE INDEX IF NOT EXISTS idx_transactions_signer ON transactions(signer);
+            CREATE INDEX IF NOT EXISTS idx_transactions_instruction ON transactions(instruction_name);
+            CREATE INDEX IF NOT EXISTS idx_transactions_slot ON transactions(slot);
+            CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
             "#,
         )
-        .bind(&decoded.signature)
-        .bind(decoded.slot as i64)
-        .bind(decoded.timestamp)
-        .bind(&decoded.program_id)
-        .bind(&decoded.signer)
-        .bind(&decoded.instruction_name)
-        .bind(&decoded.args)
-        .bind(&accounts_json)
-        .bind(&raw_tx_json)
         .execute(&self.pool)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to insert transaction {} into PostgreSQL",
-                decoded.signature
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                key TEXT PRIMARY KEY,
+                value BIGINT NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
             )
-        })?;
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
 
-    pub async fn insert_transactions_batch(
+    pub async fn insert_transaction(
         &self,
-        transactions: &[DecodedInstruction],
-    ) -> Result<usize> {
-        if transactions.is_empty() {
-            return Ok(0);
-        }
-
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("Failed to begin PostgreSQL transaction")?;
-
-        let mut inserted = 0usize;
-
-        for decoded in transactions {
-            let accounts_json =
-                serde_json::to_value(&decoded.accounts).context("Failed to serialize accounts")?;
-
-            let result = sqlx::query(
-                r#"
-                INSERT INTO transactions
-                    (signature, slot, block_time, program_id, signer, instruction_name,
-                     instruction_args, accounts, raw_transaction)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                ON CONFLICT (signature) DO NOTHING
-                "#,
+        signature: &str,
+        slot: u64,
+        block_time: i64,
+        program_id: &str,
+        signer: &str,
+        instruction_name: &str,
+        instruction_args: Value,
+        accounts: Value,
+        raw_transaction: Option<Value>,
+    ) -> Result<(), PostgresError> {
+        sqlx::query(
+            r#"
+            INSERT INTO transactions (
+                signature, slot, block_time, program_id, signer,
+                instruction_name, instruction_args, accounts, raw_transaction
             )
-            .bind(&decoded.signature)
-            .bind(decoded.slot as i64)
-            .bind(decoded.timestamp)
-            .bind(&decoded.program_id)
-            .bind(&decoded.signer)
-            .bind(&decoded.instruction_name)
-            .bind(&decoded.args)
-            .bind(&accounts_json)
-            .bind(serde_json::Value::Null)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| {
-                format!("Batch insert failed for transaction {}", decoded.signature)
-            })?;
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (signature) DO UPDATE SET
+                slot = EXCLUDED.slot,
+                block_time = EXCLUDED.block_time,
+                program_id = EXCLUDED.program_id,
+                signer = EXCLUDED.signer,
+                instruction_name = EXCLUDED.instruction_name,
+                instruction_args = EXCLUDED.instruction_args,
+                accounts = EXCLUDED.accounts,
+                raw_transaction = EXCLUDED.raw_transaction
+            "#,
+        )
+        .bind(signature)
+        .bind(slot as i64)
+        .bind(block_time)
+        .bind(program_id)
+        .bind(signer)
+        .bind(instruction_name)
+        .bind(Json(instruction_args))
+        .bind(Json(accounts))
+        .bind(raw_transaction.map(Json))
+        .execute(&self.pool)
+        .await?;
 
-            inserted += result.rows_affected() as usize;
-        }
-
-        tx.commit()
-            .await
-            .context("Failed to commit batch insert transaction")?;
-
-        Ok(inserted)
+        Ok(())
     }
 
-    pub async fn get_transaction(&self, signature: &str) -> Result<Option<TransactionRow>> {
-        let row = sqlx::query_as::<_, TransactionRow>(
+    pub async fn get_checkpoint(&self, key: &str) -> Result<Option<i64>, PostgresError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT value FROM checkpoints WHERE key = $1
+            "#,
+        )
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|(v,)| v))
+    }
+
+    pub async fn update_checkpoint(&self, key: &str, value: i64) -> Result<(), PostgresError> {
+        sqlx::query(
+            r#"
+            INSERT INTO checkpoints (key, value, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (key) DO UPDATE SET
+                value = EXCLUDED.value,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_transaction(&self, signature: &str) -> Result<Option<TransactionRecord>, PostgresError> {
+        let record = sqlx::query_as::<_, TransactionRecord>(
             r#"
             SELECT signature, slot, block_time, program_id, signer, instruction_name,
                    instruction_args, accounts, raw_transaction, created_at
@@ -176,210 +174,66 @@ impl PostgresDb {
         )
         .bind(signature)
         .fetch_optional(&self.pool)
-        .await
-        .with_context(|| format!("Failed to query transaction {}", signature))?;
+        .await?;
 
-        Ok(row)
+        Ok(record)
     }
 
     pub async fn list_transactions(
         &self,
-        filters: &TransactionFilters,
-    ) -> Result<Vec<TransactionRow>> {
-        let limit = filters.limit.unwrap_or(50).min(500);
-        let offset = filters.offset.unwrap_or(0);
-
-        let mut conditions: Vec<String> = Vec::new();
-        let mut param_index = 1i32;
-
-        if filters.instruction.is_some() {
-            conditions.push(format!("instruction_name = ${}", param_index));
-            param_index += 1;
-        }
-        if filters.signer.is_some() {
-            conditions.push(format!("signer = ${}", param_index));
-            param_index += 1;
-        }
-        if filters.start_slot.is_some() {
-            conditions.push(format!("slot >= ${}", param_index));
-            param_index += 1;
-        }
-        if filters.end_slot.is_some() {
-            conditions.push(format!("slot <= ${}", param_index));
-            param_index += 1;
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
-
-        let query_str = format!(
-            r#"
-            SELECT signature, slot, block_time, program_id, signer, instruction_name,
-                   instruction_args, accounts, raw_transaction, created_at
-            FROM transactions
-            {}
-            ORDER BY slot DESC
-            LIMIT ${} OFFSET ${}
-            "#,
-            where_clause,
-            param_index,
-            param_index + 1
+        instruction: Option<&str>,
+        signer: Option<&str>,
+        start_slot: Option<u64>,
+        end_slot: Option<u64>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TransactionRecord>, PostgresError> {
+        let mut query = String::from(
+            "SELECT signature, slot, block_time, program_id, signer, instruction_name,
+                    instruction_args, accounts, raw_transaction, created_at
+             FROM transactions WHERE 1=1"
         );
 
-        let mut query = sqlx::query_as::<_, TransactionRow>(&query_str);
+        let mut params: Vec<Box<dyn sqlx::Encode<'_, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>>> = Vec::new();
+        let mut param_count = 1;
 
-        if let Some(ref instruction) = filters.instruction {
-            query = query.bind(instruction);
+        if let Some(inst) = instruction {
+            query.push_str(&format!(" AND instruction_name = ${}", param_count));
+            params.push(Box::new(inst.to_string()));
+            param_count += 1;
         }
-        if let Some(ref signer) = filters.signer {
-            query = query.bind(signer);
+        if let Some(sig) = signer {
+            query.push_str(&format!(" AND signer = ${}", param_count));
+            params.push(Box::new(sig.to_string()));
+            param_count += 1;
         }
-        if let Some(start) = filters.start_slot {
-            query = query.bind(start);
+        if let Some(start) = start_slot {
+            query.push_str(&format!(" AND slot >= ${}", param_count));
+            params.push(Box::new(start as i64));
+            param_count += 1;
         }
-        if let Some(end) = filters.end_slot {
-            query = query.bind(end);
-        }
-
-        query = query.bind(limit).bind(offset);
-
-        let rows = query
-            .fetch_all(&self.pool)
-            .await
-            .context("Failed to list transactions from PostgreSQL")?;
-
-        Ok(rows)
-    }
-
-    pub async fn get_checkpoint(&self, key: &str) -> Result<Option<i64>> {
-        let row = sqlx::query("SELECT value FROM checkpoints WHERE key = $1")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await
-            .with_context(|| format!("Failed to read checkpoint '{}'", key))?;
-
-        Ok(row.map(|r| r.get::<i64, _>("value")))
-    }
-
-    pub async fn set_checkpoint(&self, key: &str, value: i64) -> Result<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO checkpoints (key, value, updated_at)
-            VALUES ($1, $2, NOW())
-            ON CONFLICT (key) DO UPDATE
-                SET value = EXCLUDED.value,
-                    updated_at = NOW()
-            "#,
-        )
-        .bind(key)
-        .bind(value)
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("Failed to set checkpoint '{}' to {}", key, value))?;
-
-        Ok(())
-    }
-
-    pub async fn insert_dead_letter(
-        &self,
-        signature: Option<&str>,
-        slot: Option<i64>,
-        error_message: &str,
-        raw_data: Option<&str>,
-    ) -> Result<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO dead_letters (signature, slot, error_message, raw_data)
-            VALUES ($1, $2, $3, $4)
-            "#,
-        )
-        .bind(signature)
-        .bind(slot)
-        .bind(error_message)
-        .bind(raw_data)
-        .execute(&self.pool)
-        .await
-        .context("Failed to insert dead letter")?;
-
-        Ok(())
-    }
-
-    pub async fn get_stats(&self) -> Result<DbStats> {
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions")
-            .fetch_one(&self.pool)
-            .await
-            .context("Failed to count transactions")?;
-
-        let last_slot: Option<i64> = sqlx::query_scalar("SELECT MAX(slot) FROM transactions")
-            .fetch_one(&self.pool)
-            .await
-            .context("Failed to get max slot")?;
-
-        let checkpoint: Option<i64> = self.get_checkpoint("last_indexed_slot").await?;
-
-        let programs: i64 =
-            sqlx::query_scalar("SELECT COUNT(DISTINCT program_id) FROM transactions")
-                .fetch_one(&self.pool)
-                .await
-                .context("Failed to count distinct programs")?;
-
-        Ok(DbStats {
-            total_transactions: total,
-            last_indexed_slot: last_slot.unwrap_or(0),
-            checkpoint_slot: checkpoint.unwrap_or(0),
-            programs_indexed: programs,
-        })
-    }
-
-    pub async fn execute_raw_query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
-        let rows = sqlx::query(sql)
-            .fetch_all(&self.pool)
-            .await
-            .context("Failed to execute raw SQL query")?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            let mut map = serde_json::Map::new();
-            for (i, col) in row.columns().iter().enumerate() {
-                let val: serde_json::Value = row
-                    .try_get_raw(i)
-                    .ok()
-                    .and_then(|v| {
-                        if v.is_null() {
-                            Some(serde_json::Value::Null)
-                        } else {
-                            row.try_get::<String, _>(i)
-                                .ok()
-                                .map(serde_json::Value::String)
-                                .or_else(|| {
-                                    row.try_get::<i64, _>(i).ok().map(|n| serde_json::json!(n))
-                                })
-                                .or_else(|| {
-                                    row.try_get::<f64, _>(i).ok().map(|n| serde_json::json!(n))
-                                })
-                                .or_else(|| {
-                                    row.try_get::<bool, _>(i).ok().map(serde_json::Value::Bool)
-                                })
-                                .or_else(|| row.try_get::<serde_json::Value, _>(i).ok())
-                        }
-                    })
-                    .unwrap_or(serde_json::Value::Null);
-                map.insert(col.name().to_string(), val);
-            }
-            results.push(serde_json::Value::Object(map));
+        if let Some(end) = end_slot {
+            query.push_str(&format!(" AND slot <= ${}", param_count));
+            params.push(Box::new(end as i64));
+            param_count += 1;
         }
 
-        Ok(results)
+        query.push_str(&format!(" ORDER BY slot DESC LIMIT ${} OFFSET ${}", param_count, param_count + 1));
+        params.push(Box::new(limit));
+        params.push(Box::new(offset));
+
+        let mut q = sqlx::query_as::<_, TransactionRecord>(&query);
+        for p in params {
+            q = q.bind(p);
+        }
+
+        let records = q.fetch_all(&self.pool).await?;
+        Ok(records)
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DbStats {
-    pub total_transactions: i64,
-    pub last_indexed_slot: i64,
-    pub checkpoint_slot: i64,
-    pub programs_indexed: i64,
+#[derive(Debug, Error)]
+pub enum PostgresError {
+    #[error("sqlx error: {0}")]
+    Sqlx(#[from] sqlx::Error),
 }
