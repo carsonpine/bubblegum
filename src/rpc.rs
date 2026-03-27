@@ -8,12 +8,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 
 const MAX_SIGNATURES_PER_REQUEST: usize = 1000;
 const BASE_BACKOFF_MS: u64 = 200;
 const MAX_BACKOFF_MS: u64 = 30_000;
 const MAX_RETRIES: u32 = 8;
+const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct RpcClientConfig {
@@ -47,16 +48,15 @@ impl HeliusRpcClient {
     }
 
     async fn acquire_rate_limit(&self) -> tokio::sync::SemaphorePermit<'_> {
-        let permit = self.semaphore.acquire().await.expect("semaphore closed");
-        permit
+        self.semaphore.acquire().await.expect("semaphore closed")
     }
 
     pub async fn get_slot(&self) -> Result<u64> {
         self.with_retry("get_slot", || async {
             let _permit = self.acquire_rate_limit().await;
-            self.inner
-                .get_slot()
+            timeout(RPC_TIMEOUT, self.inner.get_slot())
                 .await
+                .map_err(|_| anyhow!("get_slot timed out after {}s", RPC_TIMEOUT.as_secs()))?
                 .context("Failed to get current slot")
         })
         .await
@@ -80,10 +80,19 @@ impl HeliusRpcClient {
                 commitment: Some(self.config.commitment),
             };
 
-            self.inner
-                .get_signatures_for_address_with_config(address, config)
-                .await
-                .context("Failed to get signatures for address")
+            timeout(
+                RPC_TIMEOUT,
+                self.inner
+                    .get_signatures_for_address_with_config(address, config),
+            )
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "get_signatures_for_address timed out after {}s",
+                    RPC_TIMEOUT.as_secs()
+                )
+            })?
+            .context("Failed to get signatures for address")
         })
         .await
     }
@@ -101,10 +110,19 @@ impl HeliusRpcClient {
                 max_supported_transaction_version: Some(0),
             };
 
-            self.inner
-                .get_transaction_with_config(signature, config)
-                .await
-                .with_context(|| format!("Failed to fetch transaction {}", signature))
+            timeout(
+                RPC_TIMEOUT,
+                self.inner.get_transaction_with_config(signature, config),
+            )
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "get_transaction timed out after {}s for sig {}",
+                    RPC_TIMEOUT.as_secs(),
+                    signature
+                )
+            })?
+            .with_context(|| format!("Failed to fetch transaction {}", signature))
         })
         .await
     }
@@ -254,8 +272,8 @@ impl HeliusRpcClient {
                         || err.to_string().contains("503")
                         || err.to_string().contains("502")
                         || err.to_string().contains("timeout")
-                        || err.to_string().to_lowercase().contains("connection")
-                        || err.to_string().to_lowercase().contains("timed out");
+                        || err.to_string().contains("timed out")
+                        || err.to_string().to_lowercase().contains("connection");
 
                     if !is_transient {
                         return Err(err
@@ -263,7 +281,6 @@ impl HeliusRpcClient {
                     }
 
                     let backoff_ms = (BASE_BACKOFF_MS * 2u64.pow(attempt - 1)).min(MAX_BACKOFF_MS);
-
                     let jitter_ms = rand_jitter(backoff_ms / 4);
                     let wait_ms = backoff_ms + jitter_ms;
 
