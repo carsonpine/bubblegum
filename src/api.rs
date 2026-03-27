@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -76,7 +76,7 @@ pub async fn run_api(state: AppState, port: u16) {
     let app = Router::new()
         .route("/api/transaction/:signature", get(get_transaction))
         .route("/api/transactions", get(list_transactions))
-        .route("/api/sql", get(execute_sql))
+        .route("/api/sql", post(execute_sql))
         .route("/api/stats", get(get_stats))
         .nest_service("/", static_files)
         .layer(cors)
@@ -135,8 +135,8 @@ struct SqlQuery {
 }
 
 async fn execute_sql(
-    Query(query): Query<SqlQuery>,
     State(state): State<AppState>,
+    Json(query): Json<SqlQuery>,
 ) -> Result<Json<SqlQueryResponse>, (StatusCode, String)> {
     let start = std::time::Instant::now();
 

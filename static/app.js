@@ -112,7 +112,7 @@ function renderTable(transactions) {
     <tr data-signature="${tx.signature}">
       <td class="mono">${tx.signature.slice(0, 8)}…</td>
       <td>${tx.slot}</td>
-      <td><span class="badge badge-pink">${tx.instruction.name}</span></td>
+      <td><span class="badge badge-pink">${tx.instruction_name}</span></td>
       <td class="mono">${tx.signer.slice(0, 8)}…</td>
       <td>${new Date(tx.timestamp * 1000).toLocaleString()}</td>
     </tr>
@@ -148,8 +148,8 @@ async function showTransactionDetail(signature) {
         </div>
       </div>
       <div class="detail-section">
-        <div class="detail-section-title">Instruction: ${tx.instruction.name}</div>
-        <div class="json-block">${JSON.stringify(tx.instruction.args, null, 2)}</div>
+        <div class="detail-section-title">Instruction: ${tx.instruction_name}</div>
+        <div class="json-block">${JSON.stringify(tx.instruction, null, 2)}</div>
       </div>
       <div class="detail-section">
         <div class="detail-section-title">Accounts</div>
@@ -185,8 +185,11 @@ async function runSql() {
   resultsTableWrap.innerHTML = '<div class="empty-state"><div class="empty-icon">⏳</div><p>Running query...</p></div>';
 
   try {
-    const url = `${API_BASE}/sql?db=${encodeURIComponent(db)}&sql=${encodeURIComponent(sql)}`;
-    const res = await fetch(url);
+    const res = await fetch(`${API_BASE}/sql`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ db, sql }),
+    });
     if (!res.ok) {
       const errText = await res.text();
       throw new Error(errText);
@@ -288,16 +291,17 @@ function clearHistory() {
 }
 
 function escapeHtml(str) {
-  return str.replace(/[&<>]/g, function(m) {
+  return str.replace(/[&<>"]/g, function(m) {
     if (m === '&') return '&amp;';
     if (m === '<') return '&lt;';
     if (m === '>') return '&gt;';
+    if (m === '"') return '&quot;';
     return m;
   });
 }
 
 function unescapeHtml(str) {
-  return str.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  return str.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
 }
 
 function exportCsv() {
@@ -321,7 +325,7 @@ function exportCsv() {
         tx.slot,
         new Date(tx.timestamp * 1000).toISOString(),
         tx.program_id,
-        tx.instruction.name,
+        tx.instruction_name,
         tx.signer,
         JSON.stringify(tx.accounts)
       ]);
@@ -346,8 +350,11 @@ function exportJson() {
     showToast('No query to export', 'warning');
     return;
   }
-  const url = `${API_BASE}/sql?db=${encodeURIComponent(db)}&sql=${encodeURIComponent(sql)}`;
-  fetch(url)
+  fetch(`${API_BASE}/sql`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ db, sql }),
+  })
     .then(res => res.json())
     .then(data => {
       const json = JSON.stringify(data, null, 2);
@@ -394,7 +401,7 @@ btnPrev.addEventListener('click', () => {
 });
 
 btnNext.addEventListener('click', () => {
-  if (totalRows === 50) {
+  if (totalRows >= 50) {
     currentPage++;
     fetchTransactions(currentPage);
   } else {

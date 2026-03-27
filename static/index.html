@@ -210,7 +210,7 @@
                 Hourly tx volume (PG)
               </button>
 
-              <button class="prebuilt-btn" data-db="clickhouse" data-sql="SELECT instruction_name, sum(total_count) AS total FROM instruction_stats_buffer GROUP BY instruction_name ORDER BY total DESC LIMIT 20;">
+              <button class="prebuilt-btn" data-db="clickhouse" data-sql="SELECT instruction_name, count() AS total FROM transactions_history GROUP BY instruction_name ORDER BY total DESC LIMIT 20;">
                 Instruction stats (CH)
               </button>
 
