@@ -1,14 +1,13 @@
-use clickhouse_rs::{Block, ClientHandle, Pool};
-use clickhouse_rs::types::{Column, Complex, Row};
-use std::time::Duration;
+use clickhouse::Client;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub struct ClickHouseDb {
-    pool: Pool,
+    client: Client,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, clickhouse::Row)]
 pub struct TransactionHistory {
     pub signature: String,
     pub slot: u64,
@@ -23,16 +22,18 @@ pub struct TransactionHistory {
 
 impl ClickHouseDb {
     pub async fn new(url: &str) -> Result<Self, ClickHouseError> {
-        let pool = Pool::new(url.parse()?);
-        let mut client = pool.get_handle().await?;
-        client.ping().await?;
-        Ok(Self { pool })
+        // Parse URL and extract credentials if present.
+        // For simplicity, we use default user/password and database.
+        let client = Client::default()
+            .with_url(url)
+            .with_user("indexer")
+            .with_password("changeme")
+            .with_database("solana_indexer");
+        Ok(Self { client })
     }
 
     pub async fn init(&self) -> Result<(), ClickHouseError> {
-        let mut client = self.pool.get_handle().await?;
-
-        client.execute(
+        self.client.query(
             r#"
             CREATE TABLE IF NOT EXISTS transactions_history (
                 signature String,
@@ -47,11 +48,11 @@ impl ClickHouseDb {
             ) ENGINE = MergeTree()
             ORDER BY (program_id, slot, signature)
             "#,
-        ).await?;
+        ).execute().await?;
 
-        client.execute(
+        self.client.query(
             r#"
-            CREATE MATERIALIZED VIEW IF NOT EXISTS mv_instruction_stats
+            CREATE MATERIALIZED VIEW IF NOT EXISTS instruction_stats_buffer
             ENGINE = SummingMergeTree()
             ORDER BY (instruction_name, date)
             AS SELECT
@@ -61,7 +62,7 @@ impl ClickHouseDb {
             FROM transactions_history
             GROUP BY instruction_name, date
             "#,
-        ).await?;
+        ).execute().await?;
 
         Ok(())
     }
@@ -71,47 +72,30 @@ impl ClickHouseDb {
             return Ok(());
         }
 
-        let mut client = self.pool.get_handle().await?;
-        let mut block = Block::new();
-
-        block = block
-            .column("signature", records.iter().map(|r| r.signature.clone()).collect::<Vec<_>>())
-            .column("slot", records.iter().map(|r| r.slot).collect::<Vec<_>>())
-            .column("block_time", records.iter().map(|r| r.block_time).collect::<Vec<_>>())
-            .column("program_id", records.iter().map(|r| r.program_id.clone()).collect::<Vec<_>>())
-            .column("signer", records.iter().map(|r| r.signer.clone()).collect::<Vec<_>>())
-            .column("instruction_name", records.iter().map(|r| r.instruction_name.clone()).collect::<Vec<_>>())
-            .column("instruction_args", records.iter().map(|r| r.instruction_args.clone()).collect::<Vec<_>>())
-            .column("accounts", records.iter().map(|r| r.accounts.clone()).collect::<Vec<_>>())
-            .column("transaction_hash", records.iter().map(|r| r.transaction_hash.clone()).collect::<Vec<_>>());
-
-        client.insert("transactions_history", block).await?;
-
+        let mut insert = self.client.insert("transactions_history")?;
+        for record in records {
+            insert.write(record).await?;
+        }
+        insert.end().await?;
         Ok(())
     }
 
-    pub async fn execute_query(&self, sql: &str) -> Result<Vec<Row>, ClickHouseError> {
-        let mut client = self.pool.get_handle().await?;
-        let block = client.query(sql).fetch_all().await?;
-        Ok(block.rows().collect())
+    pub async fn execute_query(&self, sql: &str) -> Result<Vec<serde_json::Value>, ClickHouseError> {
+        let rows = self.client.query(sql).fetch_all::<serde_json::Value>().await?;
+        Ok(rows)
     }
 
     pub async fn get_total_count(&self) -> Result<u64, ClickHouseError> {
-        let mut client = self.pool.get_handle().await?;
-        let block = client.query("SELECT count() FROM transactions_history").fetch_all().await?;
-        if let Some(row) = block.rows().next() {
-            let count: u64 = row.get(0)?;
-            Ok(count)
-        } else {
-            Ok(0)
-        }
+        let count: u64 = self.client
+            .query("SELECT count() FROM transactions_history")
+            .fetch_one()
+            .await?;
+        Ok(count)
     }
 }
 
 #[derive(Debug, Error)]
 pub enum ClickHouseError {
     #[error("clickhouse error: {0}")]
-    Driver(#[from] clickhouse_rs::errors::Error),
-    #[error("url parse error: {0}")]
-    UrlParse(#[from] url::ParseError),
+    Client(#[from] clickhouse::error::Error),
 }

@@ -156,17 +156,9 @@ async fn execute_sql(
                 .collect()
         }
         "clickhouse" => {
-            let ch_rows = state.clickhouse.execute_query(&query.sql).await
+            let rows = state.clickhouse.execute_query(&query.sql).await
                 .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-            ch_rows.into_iter()
-                .map(|row| {
-                    let mut obj = serde_json::Map::new();
-                    for (name, value) in row.into_iter() {
-                        obj.insert(name, value);
-                    }
-                    serde_json::Value::Object(obj)
-                })
-                .collect()
+            rows
         }
         _ => return Err((StatusCode::BAD_REQUEST, "Invalid database".to_string())),
     };

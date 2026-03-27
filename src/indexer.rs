@@ -1,9 +1,8 @@
 use crate::config::Config;
-use crate::decoder::{DecodedAccount, DecodedInstruction, Decoder};
+use crate::decoder::{DecodedInstruction, Decoder};
 use crate::db::clickhouse::{ClickHouseDb, TransactionHistory};
 use crate::db::postgres::PostgresDb;
 use crate::rpc::RpcService;
-use crate::logging;
 use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta;
 use std::sync::Arc;
