@@ -8,6 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::Column;
 use sqlx::Row;
+use sqlx::TypeInfo;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
@@ -38,6 +39,7 @@ pub struct TransactionResponse {
     pub slot: u64,
     pub timestamp: i64,
     pub program_id: String,
+    pub instruction_name: String,
     pub instruction: serde_json::Value,
     pub signer: String,
     pub accounts: serde_json::Value,
@@ -50,6 +52,7 @@ impl From<crate::db::postgres::TransactionRecord> for TransactionResponse {
             slot: record.slot as u64,
             timestamp: record.block_time,
             program_id: record.program_id,
+            instruction_name: record.instruction_name,
             instruction: record.instruction_args.0,
             signer: record.signer,
             accounts: record.accounts.0,
@@ -134,6 +137,19 @@ struct SqlQuery {
     sql: String,
 }
 
+fn pg_col_to_json(row: &sqlx::postgres::PgRow, i: usize, type_name: &str) -> serde_json::Value {
+    match type_name {
+        "INT2" => row.try_get::<i16, _>(i).map(|v| serde_json::json!(v)).unwrap_or(serde_json::Value::Null),
+        "INT4" | "INT" => row.try_get::<i32, _>(i).map(|v| serde_json::json!(v)).unwrap_or(serde_json::Value::Null),
+        "INT8" | "BIGINT" => row.try_get::<i64, _>(i).map(|v| serde_json::json!(v)).unwrap_or(serde_json::Value::Null),
+        "FLOAT4" => row.try_get::<f32, _>(i).map(|v| serde_json::json!(v)).unwrap_or(serde_json::Value::Null),
+        "FLOAT8" => row.try_get::<f64, _>(i).map(|v| serde_json::json!(v)).unwrap_or(serde_json::Value::Null),
+        "BOOL" => row.try_get::<bool, _>(i).map(serde_json::Value::Bool).unwrap_or(serde_json::Value::Null),
+        "JSON" | "JSONB" => row.try_get::<serde_json::Value, _>(i).unwrap_or(serde_json::Value::Null),
+        _ => row.try_get::<String, _>(i).map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+    }
+}
+
 async fn execute_sql(
     State(state): State<AppState>,
     Json(query): Json<SqlQuery>,
@@ -150,12 +166,8 @@ async fn execute_sql(
                 .map(|row| {
                     let mut obj = serde_json::Map::new();
                     for (i, col) in row.columns().iter().enumerate() {
-                        let value: Result<serde_json::Value, _> = row.try_get(i);
-                        if let Ok(v) = value {
-                            obj.insert(col.name().to_string(), v);
-                        } else {
-                            obj.insert(col.name().to_string(), serde_json::Value::Null);
-                        }
+                        let v = pg_col_to_json(&row, i, col.type_info().name());
+                        obj.insert(col.name().to_string(), v);
                     }
                     serde_json::Value::Object(obj)
                 })

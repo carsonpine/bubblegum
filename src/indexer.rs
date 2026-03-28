@@ -49,7 +49,7 @@ impl Indexer {
         } else if let Some(slot) = self.config.start_slot {
             slot as i64
         } else {
-            0
+            self.rpc.get_slot().await? as i64
         };
 
         let end_slot = self.config.end_slot.map(|s| s as i64);

@@ -3,7 +3,8 @@ use borsh::BorshDeserialize;
 use serde_json::{json, Value};
 use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::{
-    EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiMessage, UiRawMessage,
+    EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiInstruction, UiMessage,
+    UiParsedMessage,
 };
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -56,8 +57,8 @@ impl Decoder {
             .first()
             .cloned()
             .ok_or(DecodeError::MissingSignature)?;
-        let raw_msg = match &ui_tx.message {
-            UiMessage::Raw(raw) => raw,
+        let parsed_msg = match &ui_tx.message {
+            UiMessage::Parsed(parsed) => parsed,
             _ => return Err(DecodeError::UnsupportedTransaction),
         };
 
@@ -66,11 +67,18 @@ impl Decoder {
 
         let mut decoded = Vec::new();
 
-        for (ix_idx, ix) in raw_msg.instructions.iter().enumerate() {
-            let ix_program_id_str = raw_msg
+        for ui_ix in &parsed_msg.instructions {
+            let ix = match ui_ix {
+                UiInstruction::Compiled(ix) => ix,
+                UiInstruction::Parsed(_) => continue,
+            };
+
+            let ix_program_id_str = parsed_msg
                 .account_keys
                 .get(ix.program_id_index as usize)
-                .ok_or(DecodeError::InvalidAccountIndex)?;
+                .ok_or(DecodeError::InvalidAccountIndex)?
+                .pubkey
+                .as_str();
             let ix_program_id = Pubkey::from_str(ix_program_id_str)
                 .map_err(|_| DecodeError::UnsupportedTransaction)?;
             if &ix_program_id != program_id {
@@ -90,7 +98,7 @@ impl Decoder {
                 .ok_or(DecodeError::UnknownDiscriminator)?;
 
             let (signer, accounts) =
-                self.resolve_accounts(raw_msg, &instruction.accounts, ix_idx)?;
+                self.resolve_accounts(parsed_msg, &instruction.accounts, &ix.accounts)?;
 
             let args = if ix_data.len() > 8 {
                 let mut data_slice = &ix_data[8..];
@@ -130,24 +138,23 @@ impl Decoder {
 
     fn resolve_accounts(
         &self,
-        message: &UiRawMessage,
+        message: &UiParsedMessage,
         account_items: &[crate::idl::IdlAccountItem],
-        ix_index: usize,
+        ix_accounts: &[u8],
     ) -> Result<(String, Vec<DecodedAccount>), DecodeError> {
         let mut signer = String::new();
         let mut accounts = Vec::new();
 
-        let ix = &message.instructions[ix_index];
         let mut flat = Vec::new();
         Self::flatten_account_items(account_items, &mut flat);
 
         for (i, acct) in flat.iter().enumerate() {
-            let key_index = *ix.accounts.get(i).ok_or(DecodeError::InvalidAccountIndex)? as usize;
-            let pubkey = message
+            let key_index = *ix_accounts.get(i).ok_or(DecodeError::InvalidAccountIndex)? as usize;
+            let parsed_acct = message
                 .account_keys
                 .get(key_index)
-                .ok_or(DecodeError::InvalidAccountIndex)?
-                .clone();
+                .ok_or(DecodeError::InvalidAccountIndex)?;
+            let pubkey = parsed_acct.pubkey.clone();
 
             if acct.signer && signer.is_empty() {
                 signer = pubkey.clone();
@@ -227,6 +234,7 @@ impl Decoder {
                                     }
                                     return Ok(Value::Object(obj));
                                 }
+                                crate::idl::IdlTypeDefKind::Unknown(_) => {}
                                 crate::idl::IdlTypeDefKind::Enum { variants } => {
                                     let variant_idx = u8::deserialize(data)?;
                                     if let Some(variant) = variants.get(variant_idx as usize) {

@@ -110,7 +110,9 @@ function renderTable(transactions) {
       <td class="mono">${tx.signature.slice(0, 8)}…</td>
       <td>${tx.slot}</td>
       <td><span class="badge badge-pink">${tx.instruction_name}</span></td>
-      <td class="mono">${tx.signer.slice(0, 8)}…</td>
+      <td class="mono">
+        <a href="https://explorer.solana.com/address/${tx.signer}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${tx.signer.slice(0, 8)}…</a>
+      </td>
       <td>${new Date(tx.timestamp * 1000).toLocaleString()}</td>
     </tr>
   `).join('');
@@ -141,7 +143,7 @@ async function showTransactionDetail(signature) {
           <div class="detail-field"><div class="field-label">Slot</div><div class="field-value">${tx.slot}</div></div>
           <div class="detail-field"><div class="field-label">Time</div><div class="field-value">${new Date(tx.timestamp * 1000).toLocaleString()}</div></div>
           <div class="detail-field"><div class="field-label">Program</div><div class="field-value">${tx.program_id}</div></div>
-          <div class="detail-field"><div class="field-label">Signer</div><div class="field-value">${tx.signer}</div></div>
+          <div class="detail-field"><div class="field-label">Signer</div><div class="field-value"><a href="https://explorer.solana.com/address/${tx.signer}" target="_blank" rel="noopener">${tx.signer}</a> <span class="copy-link" onclick="navigator.clipboard.writeText('${tx.signer}').then(()=>showToast('Copied','info'))">copy</span></div></div>
         </div>
       </div>
       <div class="detail-section">
@@ -425,8 +427,16 @@ prebuiltBtns.forEach(btn => {
     if (db && sql) {
       dbSelect.value = db;
       sqlInput.value = sql;
+      runSql();
     }
   });
+});
+
+sqlInput.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    runSql();
+  }
 });
 
 // Tab switching

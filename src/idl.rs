@@ -69,8 +69,8 @@ pub struct IdlAccountItemDetailed {
 #[derive(Debug, Clone, Deserialize)]
 pub struct IdlAccount {
     pub name: String,
-    #[serde(rename = "type")]
-    pub ty: IdlType,
+    #[serde(rename = "type", default)]
+    pub ty: Option<IdlType>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,6 +85,7 @@ pub struct IdlTypeDef {
 pub enum IdlTypeDefKind {
     Struct { fields: Vec<IdlField> },
     Enum { variants: Vec<IdlEnumVariant> },
+    Unknown(serde_json::Value),
 }
 
 #[derive(Debug, Clone, Deserialize)]

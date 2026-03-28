@@ -886,3 +886,15 @@ body::before {
 #toast.toast-info {
   border-left: 3px solid var(--pink-hot);
 }
+.copy-link {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin-left: 0.4rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  vertical-align: middle;
+}
+.copy-link:hover {
+  color: var(--pink-hot);
+}
