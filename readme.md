@@ -91,7 +91,6 @@ cp .env.example .env
 docker compose up
 
 # Dashboard: http://localhost:3000
-# Adminer:   http://localhost:8080
 ```
 
 That's it. One command. All services start with health checks, the indexer waits
@@ -103,25 +102,19 @@ for both databases to be ready, then begins indexing.
 
 All configuration is via environment variables (`.env` file or Docker Compose env).
 
-| Variable             | Required | Default         | Description                                        |
-|----------------------|----------|------------------|----------------------------------------------------|
-| `HELIUS_RPC_URL`     | ✅       | —               | Helius RPC URL with your API key                  |
-| `PROGRAM_ID`         | ✅       | —               | Solana program public key (base58) to index        |
-| `POSTGRES_URL`       | ✅       | —               | PostgreSQL connection string                       |
-| `CLICKHOUSE_URL`     | ✅       | —               | ClickHouse HTTP URL                               |
-| `CLICKHOUSE_USER`    | ❌       | `default`       | ClickHouse username                               |
-| `CLICKHOUSE_PASSWORD`| ❌       | `changeme`      | ClickHouse password                               |
-| `CLICKHOUSE_DB`      | ❌       | `solana_indexer`| ClickHouse database name                          |
-| `START_SLOT`         | ❌       | checkpoint      | Starting slot (resumes from checkpoint if unset)  |
-| `END_SLOT`           | ❌       | current slot    | Ending slot                                       |
-| `BATCH_SIZE`         | ❌       | `100`           | Slots per processing batch (max 1000)             |
-| `IDL_PATH`           | ❌       | `account`       | Path to IDL JSON or `"account"` for on-chain      |
-| `API_PORT`           | ❌       | `3000`          | REST API and dashboard port                       |
-| `RPC_RATE_LIMIT`     | ❌       | `10`            | Helius RPS limit (free=10, paid=up to 100)        |
-| `DB_MAX_CONNECTIONS` | ❌       | `10`            | PostgreSQL connection pool size                   |
-| `CH_BATCH_SIZE`      | ❌       | `1000`          | ClickHouse records per batch insert               |
-| `LOG_LEVEL`          | ❌       | `info`          | `trace`, `debug`, `info`, `warn`, or `error`      |
-| `RUST_ENV`           | ❌       | dev             | Set to `production` for JSON log output           |
+| Variable             | Required | Default          | Description                                             |
+|----------------------|----------|------------------|---------------------------------------------------------|
+| `HELIUS_RPC_URL`     | ✅       | —                | Helius RPC URL with your API key                        |
+| `PROGRAM_ID`         | ✅       | —                | Solana program public key (base58) to index             |
+| `POSTGRES_URL`       | ✅       | —                | PostgreSQL connection string                            |
+| `CLICKHOUSE_URL`     | ✅       | —                | ClickHouse HTTP URL                                     |
+| `CLICKHOUSE_USER`    | ❌       | `default`        | ClickHouse username                                     |
+| `CLICKHOUSE_PASSWORD`| ❌       | *(empty)*        | ClickHouse password                                     |
+| `START_SLOT`         | ❌       | current slot     | Starting slot; resumes from checkpoint if one exists    |
+| `END_SLOT`           | ❌       | *(runs forever)* | Stop indexing at this slot                              |
+| `BATCH_SIZE`         | ❌       | `100`            | Transactions per processing batch                       |
+| `IDL_PATH`           | ❌       | *(on-chain)*     | Path to local IDL JSON file; omit to fetch from chain   |
+| `API_PORT`           | ❌       | `3000`           | REST API and dashboard port                             |
 
 ---
 
@@ -270,7 +263,7 @@ Open `http://localhost:3000` after starting the stack.
 docker compose exec postgres psql -U indexer -d solana_indexer -c "SELECT COUNT(*) FROM transactions;"
 
 # ClickHouse
-docker compose exec clickhouse clickhouse-client --user indexer --password changeme \
+docker compose exec clickhouse clickhouse-client --user indexer \
   --query "SELECT count() FROM solana_indexer.transactions_history;"
 ```
 
@@ -281,13 +274,13 @@ docker compose exec clickhouse clickhouse-client --user indexer --password chang
 curl http://localhost:3000/health
 
 # Stats
-curl http://localhost:3000/stats
+curl http://localhost:3000/api/stats
 
 # Transactions
-curl "http://localhost:3000/transactions?limit=5"
+curl "http://localhost:3000/api/transactions?limit=5"
 
 # Known transaction (replace with a real signature after indexing)
-curl http://localhost:3000/transaction/SIGNATURE_HERE
+curl http://localhost:3000/api/transaction/SIGNATURE_HERE
 ```
 
 ### Run with a local IDL file
@@ -297,8 +290,7 @@ curl http://localhost:3000/transaction/SIGNATURE_HERE
 anchor idl fetch YOUR_PROGRAM_ID --provider.cluster mainnet -o idl.json
 
 # Set in .env
-IDL_PATH=/app/idl.json
-IDL_FILE=./idl.json  # for docker-compose volume mount
+IDL_PATH=/path/to/idl.json
 
 docker compose up --build
 ```
@@ -312,8 +304,7 @@ docker compose up --build
 - If using a file: verify the path is correct and the JSON is valid Anchor IDL.
 
 **RPC errors / rate limit warnings**
-- Reduce `RPC_RATE_LIMIT` in `.env` (free Helius tier supports 10 RPS).
-- Consider upgrading your Helius plan for higher throughput.
+- The free Helius tier supports 10 RPS. If you're seeing rate limit errors, consider upgrading your plan.
 
 **No transactions appearing**
 - Confirm `PROGRAM_ID` is the correct base58 public key.
