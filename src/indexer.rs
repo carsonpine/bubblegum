@@ -42,9 +42,10 @@ impl Indexer {
     pub async fn run(&self) -> Result<(), anyhow::Error> {
         let program_id = self.config.program_id;
         let batch_size = self.config.batch_size;
+        let end_slot = self.config.end_slot.map(|s| s as i64);
 
         let last_slot = self.postgres.get_checkpoint("last_indexed_slot").await?;
-        let start_slot = if let Some(slot) = last_slot {
+        let mut from_slot = if let Some(slot) = last_slot {
             slot + 1
         } else if let Some(slot) = self.config.start_slot {
             slot as i64
@@ -52,107 +53,117 @@ impl Indexer {
             self.rpc.get_slot().await? as i64
         };
 
-        let end_slot = self.config.end_slot.map(|s| s as i64);
+        info!("Indexer starting from slot {}", from_slot);
 
-        info!("Indexer starting from slot {}", start_slot);
-
-        let mut current_slot = start_slot;
         let mut processed = 0usize;
         let start_time = Instant::now();
 
         *self.running.write().await = true;
 
-        while *self.running.read().await {
-            let target_slot = if let Some(end) = end_slot {
-                if current_slot > end {
-                    break;
-                }
-                end as u64
-            } else {
-                self.rpc.get_slot().await?
-            };
-
-            if current_slot as u64 > target_slot {
-                if end_slot.is_none() {
-                    sleep(Duration::from_secs(2)).await;
-                    continue;
-                } else {
+        'outer: while *self.running.read().await {
+            if let Some(end) = end_slot {
+                if from_slot > end {
                     break;
                 }
             }
 
-            let mut all_sigs: Vec<Signature> = Vec::new();
+            let tip = self.rpc.get_slot().await?;
+            let target = end_slot.map(|e| e as u64).unwrap_or(tip);
+
+            if from_slot as u64 > tip {
+                sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+
+            // Paginate signatures newest→oldest, fetch and process each page immediately.
             let mut before: Option<Signature> = None;
-            'fetch: loop {
-                let page = self
+
+            loop {
+                if !*self.running.read().await {
+                    break 'outer;
+                }
+
+                let page = match self
                     .rpc
                     .get_signatures_for_address(&program_id, before, None)
-                    .await?;
+                    .await
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!("Failed to fetch signatures: {}", e);
+                        sleep(Duration::from_secs(1)).await;
+                        break;
+                    }
+                };
+
                 if page.is_empty() {
                     break;
                 }
+
                 before = page.last().map(|s| s.signature);
-                for sig_info in page {
-                    if sig_info.slot < current_slot as u64 {
-                        break 'fetch;
+
+                // Collect sigs in this page that fall within our range.
+                let mut sigs: Vec<Signature> = Vec::new();
+                let mut reached_start = false;
+                for sig_info in &page {
+                    if sig_info.slot < from_slot as u64 {
+                        reached_start = true;
+                        break;
                     }
-                    if sig_info.slot <= target_slot {
-                        all_sigs.push(sig_info.signature);
+                    if sig_info.slot <= target {
+                        sigs.push(sig_info.signature);
                     }
                 }
-            }
-            all_sigs.reverse();
 
-            if all_sigs.is_empty() {
-                if end_slot.is_none() {
-                    sleep(Duration::from_secs(5)).await;
-                    continue;
-                } else {
+                // Process this page oldest-first so the checkpoint advances correctly.
+                sigs.reverse();
+
+                let mut batch_txs = Vec::new();
+                for sig in sigs {
+                    match self.rpc.get_transaction_by_signature(&sig).await {
+                        Ok(tx) => {
+                            batch_txs.push(tx);
+                            if batch_txs.len() >= batch_size {
+                                let last_slot = batch_txs.last().map(|t| t.slot).unwrap();
+                                self.process_batch(&batch_txs, &program_id).await?;
+                                processed += batch_txs.len();
+                                self.postgres
+                                    .update_checkpoint("last_indexed_slot", last_slot as i64)
+                                    .await?;
+                                batch_txs.clear();
+
+                                let elapsed = start_time.elapsed();
+                                let rate =
+                                    processed as f64 / elapsed.as_secs_f64().max(0.001);
+                                info!("Progress: {} txs, rate: {:.1} tx/s", processed, rate);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to fetch transaction {}: {}", sig, e);
+                        }
+                    }
+                }
+
+                if !batch_txs.is_empty() {
+                    let last_slot = batch_txs.last().map(|t| t.slot).unwrap();
+                    self.process_batch(&batch_txs, &program_id).await?;
+                    processed += batch_txs.len();
+                    self.postgres
+                        .update_checkpoint("last_indexed_slot", last_slot as i64)
+                        .await?;
+
+                    let elapsed = start_time.elapsed();
+                    let rate = processed as f64 / elapsed.as_secs_f64().max(0.001);
+                    info!("Progress: {} txs, rate: {:.1} tx/s", processed, rate);
+                }
+
+                if reached_start {
                     break;
                 }
             }
 
-            let mut batch_txs: Vec<EncodedConfirmedTransactionWithStatusMeta> = Vec::new();
-            let mut last_processed_slot = current_slot as u64;
-
-            for sig in all_sigs {
-                match self.rpc.get_transaction_by_signature(&sig).await {
-                    Ok(tx) => {
-                        last_processed_slot = tx.slot;
-                        batch_txs.push(tx);
-                        if batch_txs.len() >= batch_size {
-                            let batch_last_slot = batch_txs.last().map(|t| t.slot).unwrap();
-                            self.process_batch(&batch_txs, &program_id).await?;
-                            processed += batch_txs.len();
-                            self.postgres
-                                .update_checkpoint("last_indexed_slot", batch_last_slot as i64)
-                                .await?;
-                            batch_txs.clear();
-
-                            if processed % 100 == 0 {
-                                let elapsed = start_time.elapsed();
-                                let rate = processed as f64 / elapsed.as_secs_f64().max(0.001);
-                                info!("Progress: {} txs, rate: {:.1} tx/s", processed, rate);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to fetch transaction {}: {}", sig, e);
-                    }
-                }
-            }
-
-            if !batch_txs.is_empty() {
-                self.process_batch(&batch_txs, &program_id).await?;
-                processed += batch_txs.len();
-                self.postgres
-                    .update_checkpoint("last_indexed_slot", last_processed_slot as i64)
-                    .await?;
-            }
-
-            current_slot = (last_processed_slot + 1) as i64;
-
-            sleep(Duration::from_millis(100)).await;
+            from_slot = tip as i64 + 1;
+            sleep(Duration::from_millis(500)).await;
         }
 
         info!("Indexing complete. Processed {} transactions.", processed);
