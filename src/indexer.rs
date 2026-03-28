@@ -178,11 +178,12 @@ impl Indexer {
     ) -> Result<(), anyhow::Error> {
         let mut ch_records = Vec::new();
 
+        let mut decoded_total = 0usize;
         for tx in txs {
             let decoded = match self.decoder.decode_transaction(tx, program_id) {
                 Ok(d) => d,
                 Err(crate::decoder::DecodeError::UnknownDiscriminator) => {
-                    debug!("Unknown discriminator in tx at slot {}, skipping", tx.slot);
+                    warn!("Unknown discriminator in tx at slot {}, skipping", tx.slot);
                     continue;
                 }
                 Err(e) => {
@@ -191,6 +192,7 @@ impl Indexer {
                 }
             };
 
+            decoded_total += decoded.len();
             for instr in decoded {
                 let accounts_json = serde_json::to_value(&instr.accounts)?;
                 let accounts_vec: Vec<String> =
@@ -222,6 +224,13 @@ impl Indexer {
                 });
             }
         }
+
+        info!(
+            "Batch: {} fetched, {} instructions decoded, {} CH records",
+            txs.len(),
+            decoded_total,
+            ch_records.len()
+        );
 
         self.clickhouse.insert_transactions(&ch_records).await?;
 
