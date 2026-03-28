@@ -1,7 +1,5 @@
-// API base URL
 const API_BASE = '/api';
 
-// State
 let currentPage = 1;
 let currentFilters = {
   instruction: '',
@@ -13,7 +11,6 @@ let currentSort = { column: 'slot', order: 'desc' };
 let totalRows = 0;
 let pollingInterval = null;
 
-// DOM elements
 const txBody = document.getElementById('tx-body');
 const txCountSpan = document.getElementById('tx-count');
 const statTotal = document.getElementById('stat-total');

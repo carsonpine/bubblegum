@@ -43,17 +43,27 @@ pub struct IdlField {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum IdlAccountItem {
-    Single(String),
-    Detailed(IdlAccountItemDetailed),
+    Group(IdlAccountGroup),
+    Account(IdlAccountItemDetailed),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IdlAccountGroup {
+    pub name: String,
+    pub accounts: Vec<IdlAccountItem>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct IdlAccountItemDetailed {
     pub name: String,
-    pub is_mut: bool,
-    pub is_signer: bool,
-    #[serde(rename = "pda")]
-    pub is_pda: Option<bool>,
+    #[serde(default, alias = "isMut")]
+    pub writable: bool,
+    #[serde(default, alias = "isSigner")]
+    pub signer: bool,
+    #[serde(default)]
+    pub optional: bool,
+    #[serde(default)]
+    pub address: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -88,10 +98,26 @@ pub struct IdlEnumVariant {
 #[serde(untagged)]
 pub enum IdlType {
     Simple(String),
-    Array { array: Vec<IdlType>, size: usize },
-    Option(Box<IdlType>),
-    Defined(String),
-    Vec(Box<IdlType>),
+    Option { option: Box<IdlType> },
+    Vec { vec: Box<IdlType> },
+    Array { array: (Box<IdlType>, usize) },
+    Defined { defined: DefinedTypeRef },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum DefinedTypeRef {
+    Object { name: String },
+    Simple(String),
+}
+
+impl DefinedTypeRef {
+    pub fn name(&self) -> &str {
+        match self {
+            DefinedTypeRef::Object { name } => name,
+            DefinedTypeRef::Simple(s) => s,
+        }
+    }
 }
 
 impl Idl {
@@ -102,14 +128,12 @@ impl Idl {
     }
 
     pub async fn from_account(client: &RpcClient, program_id: &Pubkey) -> Result<Self, IdlError> {
-        // Anchor derives the IDL address via create_with_seed, not find_program_address
         let (base, _) = Pubkey::find_program_address(&[], program_id);
         let idl_address = Pubkey::create_with_seed(&base, "anchor:idl", program_id)
             .map_err(|_| IdlError::InvalidAddress)?;
 
         let data = client.get_account_data(&idl_address).await?;
 
-        // Account layout: 8-byte discriminator + 32-byte authority + 4-byte length + zlib data
         let header_len = 8 + 32;
         if data.len() < header_len + 4 {
             return Err(IdlError::InvalidAccountData);

@@ -114,6 +114,20 @@ impl Decoder {
         Ok(decoded)
     }
 
+    fn flatten_account_items<'a>(
+        items: &'a [crate::idl::IdlAccountItem],
+        out: &mut Vec<&'a crate::idl::IdlAccountItemDetailed>,
+    ) {
+        for item in items {
+            match item {
+                crate::idl::IdlAccountItem::Account(acct) => out.push(acct),
+                crate::idl::IdlAccountItem::Group(group) => {
+                    Self::flatten_account_items(&group.accounts, out)
+                }
+            }
+        }
+    }
+
     fn resolve_accounts(
         &self,
         message: &UiRawMessage,
@@ -124,11 +138,10 @@ impl Decoder {
         let mut accounts = Vec::new();
 
         let ix = &message.instructions[ix_index];
-        for (i, item) in account_items.iter().enumerate() {
-            let (_name, is_mut, is_signer) = match item {
-                crate::idl::IdlAccountItem::Single(_name) => (_name, false, false),
-                crate::idl::IdlAccountItem::Detailed(d) => (&d.name, d.is_mut, d.is_signer),
-            };
+        let mut flat = Vec::new();
+        Self::flatten_account_items(account_items, &mut flat);
+
+        for (i, acct) in flat.iter().enumerate() {
             let key_index = *ix.accounts.get(i).ok_or(DecodeError::InvalidAccountIndex)? as usize;
             let pubkey = message
                 .account_keys
@@ -136,14 +149,14 @@ impl Decoder {
                 .ok_or(DecodeError::InvalidAccountIndex)?
                 .clone();
 
-            if is_signer && signer.is_empty() {
+            if acct.signer && signer.is_empty() {
                 signer = pubkey.clone();
             }
 
             accounts.push(DecodedAccount {
                 pubkey,
-                is_signer,
-                is_writable: is_mut,
+                is_signer: acct.signer,
+                is_writable: acct.writable,
             });
         }
 
@@ -184,17 +197,15 @@ impl Decoder {
                 }
                 _ => Ok(Value::Null),
             },
-            IdlType::Array { array, size } => {
+            IdlType::Array { array: (inner, size) } => {
                 let mut arr = Vec::new();
                 for _ in 0..*size {
-                    for inner in array {
-                        let v = self.decode_field(data, inner)?;
-                        arr.push(v);
-                    }
+                    let v = self.decode_field(data, inner)?;
+                    arr.push(v);
                 }
                 Ok(Value::Array(arr))
             }
-            IdlType::Option(inner) => {
+            IdlType::Option { option: inner } => {
                 let tag = u8::deserialize(data)?;
                 if tag == 0 {
                     Ok(Value::Null)
@@ -202,10 +213,11 @@ impl Decoder {
                     self.decode_field(data, inner)
                 }
             }
-            IdlType::Defined(name) => {
+            IdlType::Defined { defined } => {
+                let name = defined.name();
                 if let Some(types) = &self.idl.types {
                     for ty_def in types {
-                        if ty_def.name == *name {
+                        if ty_def.name == name {
                             match &ty_def.ty {
                                 crate::idl::IdlTypeDefKind::Struct { fields } => {
                                     let mut obj = serde_json::Map::new();
@@ -238,7 +250,7 @@ impl Decoder {
                 }
                 Ok(Value::Null)
             }
-            IdlType::Vec(inner) => {
+            IdlType::Vec { vec: inner } => {
                 let len = u32::deserialize(data)?;
                 let mut arr = Vec::with_capacity(len as usize);
                 for _ in 0..len {

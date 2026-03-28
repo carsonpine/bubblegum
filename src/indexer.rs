@@ -81,7 +81,6 @@ impl Indexer {
                 }
             }
 
-            // Paginate through all signatures newer than current_slot, oldest-first
             let mut all_sigs: Vec<Signature> = Vec::new();
             let mut before: Option<Signature> = None;
             'fetch: loop {
@@ -102,7 +101,6 @@ impl Indexer {
                     }
                 }
             }
-            // RPC returns newest-first; reverse to process oldest-first
             all_sigs.reverse();
 
             if all_sigs.is_empty() {
