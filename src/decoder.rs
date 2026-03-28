@@ -3,8 +3,8 @@ use borsh::BorshDeserialize;
 use serde_json::{json, Value};
 use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::{
-    EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiInstruction, UiMessage,
-    UiParsedMessage,
+    option_serializer::OptionSerializer, EncodedConfirmedTransactionWithStatusMeta,
+    EncodedTransaction, UiInstruction, UiMessage,
 };
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -37,6 +37,13 @@ pub struct DecodedAccount {
 impl Decoder {
     pub fn new(idl: Idl) -> Self {
         let discriminator_map = idl.build_discriminator_map();
+        tracing::info!(
+            "Decoder initialized: {} instructions in discriminator map",
+            discriminator_map.len()
+        );
+        for (disc, ix) in &discriminator_map {
+            tracing::debug!("  {:?} => {}", disc, ix.name);
+        }
         Self {
             discriminator_map,
             idl,
@@ -57,52 +64,93 @@ impl Decoder {
             .first()
             .cloned()
             .ok_or(DecodeError::MissingSignature)?;
-        let parsed_msg = match &ui_tx.message {
-            UiMessage::Parsed(parsed) => parsed,
+        let raw_msg = match &ui_tx.message {
+            UiMessage::Raw(raw) => raw,
             _ => return Err(DecodeError::UnsupportedTransaction),
         };
 
         let slot = tx.slot;
         let timestamp = tx.block_time.unwrap_or(0);
 
+        // Build the full account list: static keys + ALT-resolved writable + readonly.
+        // With Json encoding the raw message only contains static keys; ALT accounts
+        // are appended in order in meta.loaded_addresses so that account indices work.
+        let mut all_accounts: Vec<String> = raw_msg.account_keys.clone();
+        if let Some(meta) = &tx.transaction.meta {
+            if let OptionSerializer::Some(loaded) = &meta.loaded_addresses {
+                all_accounts.extend(loaded.writable.iter().cloned());
+                all_accounts.extend(loaded.readonly.iter().cloned());
+            }
+        }
+
         let mut decoded = Vec::new();
 
-        for ui_ix in &parsed_msg.instructions {
-            let ix = match ui_ix {
-                UiInstruction::Compiled(ix) => ix,
-                UiInstruction::Parsed(_) => continue,
-            };
+        // Collect all instructions: outer + inner (CPI calls).
+        let mut all_ixs: Vec<&solana_transaction_status::UiCompiledInstruction> = Vec::new();
 
-            let ix_program_id_str = parsed_msg
-                .account_keys
-                .get(ix.program_id_index as usize)
-                .ok_or(DecodeError::InvalidAccountIndex)?
-                .pubkey
-                .as_str();
-            let ix_program_id = Pubkey::from_str(ix_program_id_str)
-                .map_err(|_| DecodeError::UnsupportedTransaction)?;
+        for ix in &raw_msg.instructions {
+            all_ixs.push(ix);
+        }
+
+        if let Some(meta) = &tx.transaction.meta {
+            if let OptionSerializer::Some(inner_groups) = &meta.inner_instructions {
+                for group in inner_groups {
+                    for ui_ix in &group.instructions {
+                        if let UiInstruction::Compiled(ix) = ui_ix {
+                            all_ixs.push(ix);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut program_ix_count = 0usize;
+        for ix in all_ixs {
+            let ix_program_id_str = match all_accounts.get(ix.program_id_index as usize) {
+                Some(k) => k.as_str(),
+                None => continue,
+            };
+            let ix_program_id = match Pubkey::from_str(ix_program_id_str) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
             if &ix_program_id != program_id {
                 continue;
             }
 
-            let ix_data = bs58::decode(&ix.data)
-                .into_vec()
-                .map_err(|_| DecodeError::UnsupportedTransaction)?;
+            program_ix_count += 1;
+
+            let ix_data = match bs58::decode(&ix.data).into_vec() {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
             if ix_data.len() < 8 {
-                return Err(DecodeError::InvalidInstructionData);
+                tracing::warn!("ix data too short ({} bytes) in {}", ix_data.len(), signature);
+                continue;
             }
             let discriminator = &ix_data[..8];
-            let instruction = self
-                .discriminator_map
-                .get(discriminator)
-                .ok_or(DecodeError::UnknownDiscriminator)?;
+            let instruction = match self.discriminator_map.get(discriminator) {
+                Some(i) => i,
+                None => {
+                    tracing::warn!(
+                        "unknown discriminator {:?} in {} (map has {} entries)",
+                        discriminator,
+                        signature,
+                        self.discriminator_map.len()
+                    );
+                    continue;
+                }
+            };
 
             let (signer, accounts) =
-                self.resolve_accounts(parsed_msg, &instruction.accounts, &ix.accounts)?;
+                match self.resolve_accounts(&all_accounts, &instruction.accounts, &ix.accounts) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
 
             let args = if ix_data.len() > 8 {
                 let mut data_slice = &ix_data[8..];
-                self.decode_args(&mut data_slice, &instruction.args)?
+                self.decode_args(&mut data_slice, &instruction.args).unwrap_or(json!({}))
             } else {
                 json!({})
             };
@@ -117,6 +165,10 @@ impl Decoder {
                 signature: signature.clone(),
                 timestamp,
             });
+        }
+
+        if program_ix_count == 0 {
+            tracing::debug!("tx {} has 0 instructions for our program", signature);
         }
 
         Ok(decoded)
@@ -138,7 +190,7 @@ impl Decoder {
 
     fn resolve_accounts(
         &self,
-        message: &UiParsedMessage,
+        all_accounts: &[String],
         account_items: &[crate::idl::IdlAccountItem],
         ix_accounts: &[u8],
     ) -> Result<(String, Vec<DecodedAccount>), DecodeError> {
@@ -149,12 +201,14 @@ impl Decoder {
         Self::flatten_account_items(account_items, &mut flat);
 
         for (i, acct) in flat.iter().enumerate() {
-            let key_index = *ix_accounts.get(i).ok_or(DecodeError::InvalidAccountIndex)? as usize;
-            let parsed_acct = message
-                .account_keys
-                .get(key_index)
-                .ok_or(DecodeError::InvalidAccountIndex)?;
-            let pubkey = parsed_acct.pubkey.clone();
+            let key_index = match ix_accounts.get(i) {
+                Some(idx) => *idx as usize,
+                None => continue,
+            };
+            let pubkey = match all_accounts.get(key_index) {
+                Some(k) => k.clone(),
+                None => continue,
+            };
 
             if acct.signer && signer.is_empty() {
                 signer = pubkey.clone();

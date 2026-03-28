@@ -34,7 +34,7 @@ impl RpcService {
         signature: &Signature,
     ) -> Result<EncodedConfirmedTransactionWithStatusMeta, RpcError> {
         let config = RpcTransactionConfig {
-            encoding: Some(UiTransactionEncoding::JsonParsed),
+            encoding: Some(UiTransactionEncoding::Json),
             commitment: Some(CommitmentConfig::confirmed()),
             max_supported_transaction_version: Some(0),
         };
