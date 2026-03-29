@@ -59,24 +59,7 @@ graph TD
 
 ---
 
-## Quick Start
-
-### Option 1: Quick Test (No Clone Required)
-
-```bash
-# 1. Download docker-compose file
-curl -O https://raw.githubusercontent.com/carsonpine/bubblegum/master/docker-compose.standalone.yml
-mv docker-compose.standalone.yml docker-compose.yml
-
-# 2. Edit HELIUS_RPC_URL in the file (add your API key)
-
-# 3. Launch
-docker compose up
-
-# Dashboard: http://localhost:3000
-```
-
-### Option 2: Full Setup (Clone Repo)
+## Getting Started
 
 ```bash
 # 1. Clone the repo
@@ -85,12 +68,12 @@ cd bubblegum
 
 # 2. Configure environment
 cp .env.example .env
-# Edit .env — set HELIUS_RPC_URL and PROGRAM_ID at minimum
+# Edit .env then set HELIUS_RPC_URL and PROGRAM_ID (MUST)
 
 # 3. Launch everything
 docker compose up
 
-# Dashboard: http://localhost:3000
+# See the UI at Dashboard: http://localhost:3000
 ```
 
 That's it. One command. All services start with health checks, the indexer waits
@@ -201,7 +184,7 @@ curl http://localhost:3000/stats
 
 ### `POST /api/sql`
 
-Execute a read-only SQL query against PostgreSQL or ClickHouse.
+Execute a read-only SQL query against PostgreSQL or ClickHouse(in development).
 
 ```bash
 curl -X POST http://localhost:3000/api/sql \
