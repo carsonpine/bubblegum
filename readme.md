@@ -70,7 +70,10 @@ cd bubblegum
 cp .env.example .env
 # Edit .env then set HELIUS_RPC_URL and PROGRAM_ID (MUST)
 
-# 3. Launch everything
+# 3. Pull prebuilt image
+docker compose pull
+
+# 4. Launch everything
 docker compose up
 
 # See the UI at Dashboard: http://localhost:3000
